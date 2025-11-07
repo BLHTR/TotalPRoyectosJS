@@ -160,11 +160,7 @@ const { useState, createContext, useContext, useEffect, useMemo, forwardRef, use
             authError = msg; // Asignar error
         } else {
             supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-            auth: {
-                persistSession: true,
-                autoRefreshToken: true,
-                detectSessionInUrl: true
-            }
+            auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
         });
             console.log('✅ Cliente de Supabase inicializado correctamente');
         }
@@ -325,7 +321,7 @@ const { useState, createContext, useContext, useEffect, useMemo, forwardRef, use
                 // Verificación y asignación de datos
                 const clientes = checkError(clientesRes, 'clientes') ? [] : clientesRes.data;
                 const estatus_proyectos = checkError(estatusRes, 'estatus_proyectos') ? [] : estatusRes.data;
-                const plicaciones = checkError(aplicacionesRes, 'aplicaciones') ? [] : aplicacionesRes.data;
+                const modulos = checkError(modulosRes, 'modulos') ? [] : modulosRes.data;
                 const modulos = checkError(modulosRes, 'modulos') ? [] : modulosRes.data;
                 const fases = checkError(fasesRes, 'fases') ? [] : fasesRes.data;
                 const consultores = checkError(consultoresRes, 'consultores') ? [] : consultoresRes.data;
@@ -399,14 +395,11 @@ const { useState, createContext, useContext, useEffect, useMemo, forwardRef, use
 
         let authListener = null;
         let isMounted = true; // Flag para memory leak
-        // Soft-timeout: si en 1s no llegó la sesión, mostramos la UI (AuthPage o Dashboard)
         const softTimer = setTimeout(() => { if (isMounted) setLoading(false); }, 1200);
-        // Soft-timeout para no quedarnos pegados en "Verificando sesión"
- // Flag para memory leak
 
         // 1. Intentar obtener la sesión (con timeout por seguridad)
         supabase.auth.getSession()
-          .then(async ({ data: { session } }) => { clearTimeout(softTimer);
+          .then(async ({ data: { session } }) => {
             if (isMounted) {
                 if (session) {
                     setUser(session.user);
@@ -446,15 +439,12 @@ const { useState, createContext, useContext, useEffect, useMemo, forwardRef, use
 
         authListener = data?.subscription;
 
-        return () => { clearTimeout(softTimer);
-          isMounted = false; // Limpieza
+        return () => { clearTimeout(softTimer);           isMounted = false; // Limpieza
           if (authListener) {
             authListener.unsubscribe();
           }
         };
       }, []);
-      
-      const uthValue = {
         user,
         role,
         loading,
@@ -493,14 +483,17 @@ const { useState, createContext, useContext, useEffect, useMemo, forwardRef, use
 
       // Si loading=true Y SÍ HAY authError, se pasa al AuthPage que lo gestiona
 
-      return (
-        
-      const authValue = { user, role, loading,
-        signIn,
-        signUp,
-        signOut
+      
+      const authValue = { 
+        user, 
+        role, 
+        loading,
+        signIn: typeof signIn === 'function' ? signIn : async ()=>({ user:null, error:{ message:'signIn no definido' } }),
+        signUp: typeof signUp === 'function' ? signUp : async ()=>({ user:null, error:{ message:'signUp no definido' } }),
+        signOut: typeof signOut === 'function' ? signOut : async ()=>({ error:null })
       };
-<AuthContext.Provider value={authValue}>
+return (
+        <AuthContext.Provider value={authValue}>
           {children}
         </AuthContext.Provider>
       );
@@ -993,7 +986,6 @@ const { useState, createContext, useContext, useEffect, useMemo, forwardRef, use
      */
     const NavItem = ({ icon, label, isActive, onClick, isCollapsed }) => {
       const Icon = icon;
-      const ctiveColor = COLORES_BRANDING.dorado;
       const inactiveColor = COLORES_BRANDING.azulOscuro;
 
       return (
@@ -1148,7 +1140,6 @@ const { useState, createContext, useContext, useEffect, useMemo, forwardRef, use
 
     const KpiCard = ({ title, value, unit, icon, isLoading }) => {
       const Icon = icon;
-      const nimatedValue = useCountUp(value);
 
       return (
         <GlassPanel className="p-5">
@@ -1314,8 +1305,6 @@ const { useState, createContext, useContext, useEffect, useMemo, forwardRef, use
           [name]: value,
         }));
       };
-
-      const plicarFiltros = async () => {
         setIsProcessing(true);
         try {
             await onFiltroAplicado(filtros); // Espera a que el padre procese
@@ -1450,7 +1439,6 @@ const { useState, createContext, useContext, useEffect, useMemo, forwardRef, use
         const clienteId = castIdSafe(filtros.clienteId);
         const pmId = castIdSafe(filtros.pmId);
         const estatusId = castIdSafe(filtros.estatusId);
-        const plicacionId = castIdSafe(filtros.aplicacionId);
         const proyectoId = castIdSafe(filtros.proyectoId); // No parsear a int si puede ser UUID
 
         if (clienteId) {
@@ -1776,7 +1764,6 @@ const { useState, createContext, useContext, useEffect, useMemo, forwardRef, use
                 const cliente = clientes.find(c => c.nombre.toLowerCase() === rowData.cliente_nombre.toLowerCase());
                 const pm = pms.find(p => p.nombre_completo.toLowerCase() === rowData.pm_nombre.toLowerCase()); // Corregido a nombre_completo
                 const est = estatus_proyectos.find(e => e.nombre.toLowerCase() === rowData.estatus_nombre.toLowerCase()); // Corregido
-                const pp = aplicaciones.find(a => a.nombre.toLowerCase() === rowData.aplicacion_nombre.toLowerCase());
 
                 if (!cliente) {
                   rowError = `Línea ${lineaNro}: No se encontró el cliente "${rowData.cliente_nombre}".`;
@@ -2003,7 +1990,6 @@ const { useState, createContext, useContext, useEffect, useMemo, forwardRef, use
             const clienteId = parseInt(data.cliente_id, 10);
             const pmId = parseInt(data.pm_id, 10);
             const estatusId = parseInt(data.estatus_id, 10);
-            const plicacionId = parseInt(data.aplicacion_id, 10);
 
             const proyectoData = {
                 id: finalId, // Usamos el ID determinado (existente o UUID)
@@ -3125,8 +3111,6 @@ const { useState, createContext, useContext, useEffect, useMemo, forwardRef, use
 
     // --- 4. Página: Login (AuthPage) ---
     const AuthPage = () => {
-      // Banner si hay problema de configuración de Supabase
-      const configError = authError;
       const [email, setEmail] = useState('');
       const [password, setPassword] = useState('');
       const [isLoginView, setIsLoginView] = useState(true);
