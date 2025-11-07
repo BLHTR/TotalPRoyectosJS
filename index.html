@@ -1,0 +1,3363 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestor de Proyectos BlatoRH (v12)</title>
+
+    <!-- React y ReactDOM -->
+    <script src="https://unpkg.com/react@17/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
+    
+    <!-- Babel (para JSX) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Supabase Client -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <!-- SheetJS (XLSX) -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    
+    <!-- Tailwind CSS (con plugins 'forms' y 'typography') -->
+    <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+
+    <!-- Fuentes (Bebas Neue y Exo) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Exo:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        /* Estilo base para el body */
+        body {
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            background-color: #0D2240; /* Fondo azul oscuro global */
+        }
+        /* Keyframes para la animación del toast */
+        @keyframes fadeInOut {
+            0% { opacity: 0; transform: translateX(100%); }
+            15% { opacity: 1; transform: translateX(0); }
+            85% { opacity: 1; transform: translateX(0); }
+            100% { opacity: 0; transform: translateX(100%); }
+        }
+    </style>
+
+    <!-- Configuración de Tailwind (v12-Redesign) -->
+    <script>
+        // Esperar a que Tailwind esté disponible
+        window.addEventListener('DOMContentLoaded', function() {
+            // Dar un pequeño tiempo para que Tailwind se cargue completamente
+            setTimeout(function() {
+                if (typeof tailwind !== 'undefined') {
+                    tailwind.config = {
+                        theme: {
+                            extend: {
+                                fontFamily: {
+                                    sans: ['Exo', 'sans-serif'], // Body
+                                    display: ['Bebas Neue', 'sans-serif'], // Títulos
+                                },
+                                colors: {
+                                    // Paleta BlatoRH v10
+                                    'azul-oscuro': '#0D2240',
+                                    'azul-principal': '#1A77D2',
+                                    'dorado': '#B1A96E', // Dorado principal
+                                    'dorado-darker': '#948e5a', // Dorado más oscuro para hover
+                                    'blanco': '#FFFFFF',
+                                    'error-suave': '#EF4444',
+                                    'exito-suave': '#10B981',
+                                    'gris-claro': '#F9FAFB', // Fondo de contenido tipo Figma
+                                    'gris-medio': '#E5E7EB',
+                                    'texto-gris': '#6B7281',
+                                    'texto-principal': '#111827',
+                                },
+                                borderRadius: {
+                                    'xl': '0.75rem', 
+                                    '2xl': '1rem',
+                                },
+                                boxShadow: {
+                                    'suave': '0 4px 20px rgba(0, 0, 0, 0.06)', // Sombra Glass
+                                },
+                                // Filtros de Glassmorphism
+                                backdropBlur: {
+                                    'lg': '12px',
+                                }
+                            },
+                        },
+                        plugins: [
+                            // Los plugins 'forms' y 'typography' se cargan desde la CDN
+                        ],
+                    };
+                } else {
+                    console.warn('Tailwind CSS no se pudo cargar correctamente');
+                }
+            }, 100);
+        });
+    </script>
+</head>
+<body class="bg-azul-oscuro">
+    <div id="root">
+        <!-- Mensaje de Carga (v12) -->
+        <div class="flex h-screen w-screen items-center justify-center bg-azul-oscuro">
+            <h1 class="font-display text-4xl font-bold tracking-wider text-dorado">Cargando Gestor BlatoRH...</h1>
+        </div>
+    </div>
+
+    <!-- Script de React (Aplicación Completa v12) -->
+    <script type="text/babel">
+
+    
+
+// === Helpers robustos para inserción en Supabase ===
+function castIdSafe(v){
+  if (v === undefined || v === null || v === '' || v === 'todos') return null;
+  // No forzar parseInt: si es UUID/string, devolver tal cual
+  return v;
+}
+async function upsertChunked(table, rows, chunkSize=500){
+  for (let i=0;i<rows.length;i+=chunkSize){
+    const chunk = rows.slice(i, i+chunkSize);
+    const { data, error } = await supabase.from(table).upsert(chunk, { onConflict: 'id' });
+    if (error) {
+      throw new Error(`Error insertando lote ${i/chunkSize+1}: ${error.message}`);
+    }
+  }
+}
+// Helper para generar UUIDs (necesario si el campo 'id' de proyectos no es serial/autogenerado)
+const generateUUID = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  // Fallback para entornos antiguos
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+};
+
+
+const { useState, createContext, useContext, useEffect, useMemo, forwardRef, useRef } = React;
+    const { createClient } = window.supabase;
+
+    // --- Contextos ---
+    const AuthContext = createContext(null);
+    const ToastContext = createContext(null);
+    const CatalogosContext = createContext(null);
+    
+    // --- Configuración de Supabase ---
+    // *** CREDENCIALES AÑADIDAS ***
+    const SUPABASE_URL = 'https://trsflixdnjkovwqighba.supabase.co'; // URL de tu proyecto
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRyc2ZsaXhkbmprb3Z3cWlnaGJhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE4OTQzMDYsImV4cCI6MjA3NzQ3MDMwNn0.ek90S-KMtyrHi14-r18sleHek1H6QoqUOy2SF5ar8m0'; // Clave Anon Key de tu proyecto
+    
+    // Variable para manejar errores de inicialización y mostrarlos en AuthPage
+    let supabase = null;
+    let authError = null; 
+
+    try {
+        if (SUPABASE_URL === '' || SUPABASE_ANON_KEY === '') {
+            const msg = '⚠️ Por favor, configura las credenciales de Supabase en el archivo HTML';
+            console.error(msg);
+            authError = msg; // Asignar error
+        } else {
+            supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+            auth: {
+                persistSession: true,
+                autoRefreshToken: true,
+                detectSessionInUrl: true
+            }
+        });
+            console.log('✅ Cliente de Supabase inicializado correctamente');
+        }
+    } catch (error) {
+        const msg = `❌ Error al inicializar Supabase: ${error.message}`;
+        console.error(msg);
+        authError = msg; // Asignar error
+    }
+
+    // Helper para manejar el timeout de getSession, ya que puede colgarse en iframes
+    const getSessionWithTimeout = (timeoutMs) => {
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                reject(new Error("Timeout al obtener la sesión de Supabase."));
+            }, timeoutMs);
+
+            if (!supabase) {
+                clearTimeout(timer);
+                reject(new Error("Cliente de Supabase no inicializado debido a un error de configuración."));
+                return;
+            }
+
+            supabase.auth.getSession()
+                .then(result => {
+                    clearTimeout(timer);
+                    resolve(result);
+                })
+                .catch(err => {
+                    clearTimeout(timer);
+                    reject(err);
+                });
+        });
+    };
+
+    // --- Librería Externa (XLSX) ---
+    // SheetJS está cargado globalmente (XLSX)
+
+    // --- Constantes de Branding (v12) ---
+    const COLORES_BRANDING = {
+      azulOscuro: '#0D2240',
+      azulPrincipal: '#1A77D2',
+      dorado: '#B1A96E', // Dorado principal
+      doradoDarker: '#948e5a', // Dorado más oscuro para hover
+      blanco: '#FFFFFF',
+      errorSuave: '#EF4444',
+      exitoSuave: '#10B981',
+      grisClaro: '#F9FAFB',
+      textoGris: '#6B7281',
+      textoPrincipal: '#111827',
+      textoBlanco: '#FFFFFF',
+    };
+
+    // --- Custom Hooks ---
+
+    /**
+     * Hook para animar números (CountUp)
+     */
+    const useCountUp = (endValue, duration = 1500) => {
+      const [value, setValue] = useState(0);
+      const stepTime = 30; // ms
+      const totalSteps = Math.round(duration / stepTime);
+      
+      useEffect(() => {
+        setValue(0); 
+        let currentStep = 0;
+        const counter = setInterval(() => {
+          currentStep++;
+          if (currentStep >= totalSteps) {
+            clearInterval(counter);
+            setValue(endValue);
+            return;
+          }
+          const progress = currentStep / totalSteps;
+          const easedValue = 1 - Math.pow(1 - progress, 5); // easeOutQuint
+          setValue(Math.round(endValue * easedValue));
+        }, stepTime);
+        
+        return () => clearInterval(counter);
+      }, [endValue, duration, totalSteps]);
+      
+      return value; 
+    };
+
+    /**
+     * Hook para calcular el riesgo del proyecto (Barra de Progreso)
+     */
+    const useProjectRisk = (horasTotal, horasInsumidas) => {
+      return useMemo(() => {
+        if (horasTotal <= 0) {
+          return { percentage: 0, colorClass: 'bg-gris-medio' };
+        }
+        const percentage = Math.min(Math.max((horasInsumidas / horasTotal) * 100, 0), 100);
+        let colorClass = 'bg-exito-suave'; // Verde (0-70%)
+        
+        if (percentage > 90) {
+          colorClass = 'bg-error-suave'; // Rojo (> 90%)
+        } else if (percentage > 70) {
+          colorClass = 'bg-yellow-500'; // Amarillo (71-90%)
+        }
+        
+        return { percentage, colorClass };
+      }, [horasTotal, horasInsumidas]);
+    };
+
+    /**
+     * Hook para cargar todos los catálogos (Req 4.2)
+     */
+    const useCatalogos = (showToast) => {
+        const [catalogos, setCatalogos] = useState({
+            clientes: [],
+            estatus_proyectos: [], // Corregido
+            aplicaciones: [],
+            modulos: [],
+            fases: [],
+            consultores: [],
+            pms: [], // Derivado de consultores
+        });
+        const [loading, setLoading] = useState(true);
+
+        // Si no hay Supabase, no cargar nada y mantenerse en carga (manejo de errores es clave)
+        if (!supabase) {
+             useEffect(() => { setLoading(false); }, []);
+             return { catalogos, loadingCatalogos: false, refreshCatalogos: () => {} };
+        }
+
+        const checkError = (response, tableName) => {
+            if (response.error) {
+                // CORRECCIÓN: Si la tabla no existe, no bloquear la app
+                if (response.error.code === '42P01') { // "undefined_table"
+                    console.error(`Error: La tabla "${tableName}" no existe en Supabase.`);
+                    // Solo mostrar el toast si hay datos para mostrar, no si es un error silencioso de conexión
+                    if (tableName === 'clientes') showToast(`Error: La tabla "${tableName}" no existe.`, 'error');
+                    return true; // Hay un error, pero lo manejamos
+                }
+                // Otro error
+                throw new Error(`Error cargando ${tableName}: ${response.error.message}`);
+            }
+            return false; // No hay error
+        };
+
+        const refreshData = async () => {
+            setLoading(true);
+            
+            // --- Carga paralela de todas las tablas ---
+            const promises = [
+                supabase.from('clientes').select('*'),
+                supabase.from('estatus_proyectos').select('*'),
+                supabase.from('aplicaciones').select('*'),
+                supabase.from('modulos').select('*'),
+                supabase.from('fases').select('*'),
+                supabase.from('consultores').select('*')
+            ];
+            
+            try {
+                // Ejecutamos las promesas en paralelo
+                const [clientesRes, estatusRes, aplicacionesRes, modulosRes, fasesRes, consultoresRes] = await Promise.all(promises);
+
+                // Verificación y asignación de datos
+                const clientes = checkError(clientesRes, 'clientes') ? [] : clientesRes.data;
+                const estatus_proyectos = checkError(estatusRes, 'estatus_proyectos') ? [] : estatusRes.data;
+                const plicaciones = checkError(aplicacionesRes, 'aplicaciones') ? [] : aplicacionesRes.data;
+                const modulos = checkError(modulosRes, 'modulos') ? [] : modulosRes.data;
+                const fases = checkError(fasesRes, 'fases') ? [] : fasesRes.data;
+                const consultores = checkError(consultoresRes, 'consultores') ? [] : consultoresRes.data;
+
+                // Derivar PMs de la lista de consultores
+                const pms = consultores.filter(c => c.es_pm);
+
+                // --- CRÍTICO: Asegurar que se sobrescriba el estado con los datos cargados ---
+                setCatalogos({
+                    clientes,
+                    estatus_proyectos,
+                    aplicaciones,
+                    modulos,
+                    fases,
+                    consultores,
+                    pms
+                });
+
+            } catch (error) {
+                console.error("Error en useCatalogos (refreshData):", error.message);
+                showToast(`Fallo al cargar catálogos: ${error.message}`, 'error');
+            }
+            setLoading(false);
+        };
+        
+        // Carga inicial
+        useEffect(() => {
+            refreshData();
+        }, []);
+
+        return { catalogos, loadingCatalogos: loading, refreshCatalogos: refreshData };
+    };
+
+    /**
+     * Proveedor de Autenticación
+     */
+    const AuthProvider = ({ children }) => {
+      const [user, setUser] = useState(null);
+      const [role, setRole] = useState('Invitado');
+      const [loading, setLoading] = useState(true);
+
+      const getRole = async (userId) => {
+          if (!supabase) return 'Invitado'; // Si no hay supabase, no hay rol.
+          
+          try {
+              const { data, error } = await supabase
+                  .from('consultores')
+                  .select('es_pm')
+                  .eq('user_id', userId)
+                  .maybeSingle(); 
+
+              if (error) {
+                  console.error("Error obteniendo rol:", error.message);
+                  return 'Consultor'; 
+              }
+              
+              // Rol: Admin si es_pm=true, Consultor si es_pm=false o no existe
+              return data && data.es_pm ? 'Admin' : 'Consultor'; 
+
+          } catch (e) {
+              console.error("Error catastrófico obteniendo rol:", e.message);
+              return 'Consultor';
+          }
+      };
+
+      useEffect(() => {
+        if (!supabase) {
+            setLoading(false);
+            return;
+        }
+
+        let authListener = null;
+        let isMounted = true; // Flag para memory leak
+        // Soft-timeout: si en 1s no llegó la sesión, mostramos la UI (AuthPage o Dashboard)
+        const softTimer = setTimeout(() => { if (isMounted) setLoading(false); }, 1200);
+        // Soft-timeout para no quedarnos pegados en "Verificando sesión"
+ // Flag para memory leak
+
+        // 1. Intentar obtener la sesión (con timeout por seguridad)
+        supabase.auth.getSession()
+          .then(async ({ data: { session } }) => { clearTimeout(softTimer);
+            if (isMounted) {
+                if (session) {
+                    setUser(session.user);
+                    const userRole = await getRole(session.user.id);
+                    setRole(userRole);
+                } else {
+                    // Si no hay sesión, aún no se autentica
+                    setUser(null);
+                    setRole('Invitado');
+                }
+                setLoading(false);
+            }
+          })
+          .catch(err => {
+            if (isMounted) {
+                console.error("Error en getSession:", err);
+                setUser(null);
+                setRole('Invitado');
+                setLoading(false);
+            }
+          });
+
+        // 2. Escuchar cambios de estado
+        const { data } = supabase.auth.onAuthStateChange(async (event, session) => {
+          if (isMounted) {
+            const user = session?.user ?? null;
+            setUser(user);
+            
+            if (user) {
+                const userRole = await getRole(user.id);
+                setRole(userRole);
+            } else {
+                setRole('Invitado');
+            }
+          }
+        });
+
+        authListener = data?.subscription;
+
+        return () => { clearTimeout(softTimer);
+          isMounted = false; // Limpieza
+          if (authListener) {
+            authListener.unsubscribe();
+          }
+        };
+      }, []);
+      
+      const uthValue = {
+        user,
+        role,
+        loading,
+        isBypass: false,
+        signIn: async (email, password) => {
+          if (!supabase) return { user: null, error: { message: authError } };
+          const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+          if (data.user) {
+            // El listener de onAuthStateChange ya actualizará el estado
+          }
+          return { user: data.user, error };
+        },
+        signUp: async (email, password) => {
+          if (!supabase) return { user: null, error: { message: authError } };
+          const { data, error } = await supabase.auth.signUp({ email, password });
+          if (data.user) {
+            // El listener de onAuthStateChange ya actualizará el estado
+          }
+          return { user: data.user, error };
+        },
+        signOut: async () => {
+          if (!supabase) return { error: null };
+          const { error } = await supabase.auth.signOut();
+          return { error };
+        },
+      };
+
+      // Si loading=true Y NO HAY authError, mostramos el spinner
+      if (loading && !authError) {
+        return (
+          <div className="flex h-screen w-screen items-center justify-center bg-azul-oscuro">
+            <h1 className="font-display text-4xl font-bold tracking-wider text-dorado">Verificando sesión...</h1>
+          </div>
+        );
+      }
+
+      // Si loading=true Y SÍ HAY authError, se pasa al AuthPage que lo gestiona
+
+      return (
+        <AuthContext.Provider value={authValue}>
+          {children}
+        </AuthContext.Provider>
+      );
+    };
+
+    const useAuth = () => {
+      return useContext(AuthContext);
+    };
+
+    /**
+     * Proveedor de Notificaciones (Toast)
+     */
+    const ToastProvider = ({ children }) => {
+        const [toasts, setToasts] = useState([]);
+
+        const showToast = (message, type = 'info') => {
+            const id = Date.now();
+            setToasts(prev => [...prev, { id, message, type }]);
+            setTimeout(() => {
+                setToasts(prev => prev.filter(t => t.id !== id));
+            }, 4000); // El toast dura 4 segundos
+        };
+
+        const IconInfo = ({ className = "w-6 h-6" }) => (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        );
+        const IconSuccess = ({ className = "w-6 h-6" }) => (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        );
+        const IconError = ({ className = "w-6 h-6" }) => (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        );
+
+        const toastConfig = {
+            info: { bg: 'bg-blue-500', icon: <IconInfo /> },
+            success: { bg: 'bg-exito-suave', icon: <IconSuccess /> },
+            error: { bg: 'bg-error-suave', icon: <IconError /> },
+        };
+
+        return (
+            <ToastContext.Provider value={{ showToast }}>
+                {children}
+                {/* Contenedor de Toasts */}
+                <div className="fixed top-5 right-5 z-[100] w-full max-w-sm space-y-3">
+                    {toasts.map(toast => {
+                        const config = toastConfig[toast.type] || toastConfig.info;
+                        return (
+                            <div
+                                key={toast.id}
+                                className={`flex items-center gap-3 rounded-xl p-4 text-white shadow-lg ${config.bg}`}
+                                style={{ animation: 'fadeInOut 4s ease-in-out forwards' }} // CSS simple para fade
+                            >
+                                <div className="flex-shrink-0">{config.icon}</div>
+                                <p className="flex-1 text-sm font-medium">{toast.message}</p>
+                            </div>
+                        );
+                    })}
+                </div>
+            </ToastContext.Provider>
+        );
+    };
+
+    const useToast = () => {
+      return useContext(ToastContext);
+    };
+
+    /**
+     * Proveedor de Catálogos
+     */
+    const CatalogosProvider = ({ children }) => {
+        const { showToast } = useToast();
+        const catalogosData = useCatalogos(showToast);
+
+        return (
+            <CatalogosContext.Provider value={catalogosData}>
+                {children}
+            </CatalogosContext.Provider>
+        );
+    };
+
+    const useCatalogosData = () => {
+      return useContext(CatalogosContext);
+    };
+
+
+    // --- Componentes de UI Personalizados (v12) ---
+
+    /**
+     * Input (Req 3.3) - Estilo Glass Oscuro
+     */
+    const FormInput = forwardRef(({ label, id, type = "text", ...props }, ref) => (
+      <div className="w-full">
+        <label htmlFor={id} className="block font-display text-sm font-medium tracking-wide text-dorado/80 mb-1">
+          {label}
+        </label>
+        <div className="mt-1">
+          <input
+            type={type}
+            id={id}
+            ref={ref}
+            {...props}
+            className="font-sans block w-full rounded-xl border-0 py-2.5 px-4 shadow-sm ring-1 ring-inset ring-dorado/30 focus:ring-2 focus:ring-inset sm:text-sm sm:leading-6"
+            style={{
+              backgroundColor: 'rgba(0, 0, 0, 0.2)', // Fondo oscuro traslúcido
+              color: COLORES_BRANDING.textoBlanco,
+              '--tw-ring-color': COLORES_BRANDING.dorado, 
+            }}
+          />
+        </div>
+      </div>
+    ));
+
+    /**
+     * Select (Req 3.3) - Estilo Glass Oscuro
+     */
+    const FormSelect = forwardRef(({ label, id, children, ...props }, ref) => (
+      <div className="w-full">
+        <label htmlFor={id} className="block font-display text-sm font-medium tracking-wide text-dorado/80 mb-1">
+          {label}
+        </label>
+        <div className="mt-1">
+          <select
+            id={id}
+            ref={ref}
+            {...props}
+            className="font-sans block w-full rounded-xl border-0 py-2.5 px-4 shadow-sm ring-1 ring-inset ring-dorado/30 focus:ring-2 focus:ring-inset sm:text-sm sm:leading-6"
+            style={{
+              backgroundColor: 'rgba(0, 0, 0, 0.2)',
+              color: COLORES_BRANDING.textoBlanco,
+              '--tw-ring-color': COLORES_BRANDING.dorado,
+            }}
+          >
+            {children}
+          </select>
+        </div>
+      </div>
+    ));
+
+    /**
+     * Filtro (Select) para Dashboard (Req 3.3) - Estilo Glass Claro
+     */
+    const FormSelectConIcono = ({ label, icon, children, ...props }) => {
+      const Icono = icon;
+      return (
+        <div className="w-full">
+          <label className="block font-display text-xs font-medium tracking-wide text-texto-gris">
+            {label}
+          </label>
+          <div className="relative mt-1">
+            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+              {Icono && <Icono className="h-5 w-5 text-texto-gris" />}
+            </div>
+            <select
+              {...props}
+              className="font-sans block w-full appearance-none rounded-xl border-0 bg-transparent py-2.5 pl-10 pr-10 text-texto-principal ring-1 ring-inset ring-dorado/20 focus:ring-2 focus:ring-inset focus:ring-azul-principal sm:text-sm"
+            >
+              {children}
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
+              <IconChevronDown className="h-5 w-5 text-texto-gris" />
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    /**
+     * Botón rediseñado (Req 3.2)
+     */
+    const Button = ({ children, onClick, type = "button", variant = "primario", className = "", icon: Icon, isLoading = false, loadingText: customLoadingText, ...restProps }) => {
+      const styles = {
+        primario: 'bg-azul-principal text-blanco hover:bg-opacity-80',
+        dorado: 'bg-dorado text-azul-oscuro hover:bg-dorado-darker font-semibold',
+        secundario: 'bg-white/10 text-blanco hover:bg-blanco/20 ring-1 ring-inset ring-blanco/30',
+        terciario: 'bg-transparent text-dorado hover:bg-dorado/10 ring-1 ring-inset ring-dorado/50',
+        error: 'bg-error-suave text-blanco hover:bg-opacity-80',
+      };
+
+      const loadingText = customLoadingText || (variant === 'dorado' ? 'Guardando...' : 'Cargando...');
+      
+      // Separar props del DOM de props personalizadas
+      const { ...domProps } = restProps;
+
+      return (
+        <button
+          type={type}
+          onClick={onClick}
+          disabled={isLoading || domProps.disabled} // Asegurar que disabled se respete
+          className={`flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold shadow-sm transition-all duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-dorado ${styles[variant]} ${isLoading ? 'cursor-not-allowed opacity-70' : ''} ${className}`}
+          {...domProps}
+        >
+          {isLoading ? (
+            <>
+              <IconSpinner className="h-5 w-5 animate-spin" />
+              {loadingText}
+            </>
+          ) : (
+            <>
+              {Icon && <Icon className="h-5 w-5" />}
+              {children}
+            </>
+          )}
+        </button>
+      );
+    };
+    
+    /**
+     * Checkbox/Toggle rediseñado (Req 3.3)
+     */
+    const ToggleSwitch = ({ enabled, onChange, label, labelSide = 'right' }) => {
+      return (
+        <label className="flex items-center cursor-pointer">
+          {label && labelSide === 'left' && (
+            <span className={`mr-3 text-sm font-medium ${enabled ? 'text-dorado' : 'text-blanco/70'} font-sans`}>
+              {label}
+            </span>
+          )}
+          <button
+            type="button"
+            className={`${
+              enabled ? 'bg-dorado' : 'bg-blanco/20'
+            } relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-dorado focus:ring-offset-2 focus:ring-offset-azul-oscuro`}
+            role="switch"
+            aria-checked={enabled}
+            onClick={() => onChange(!enabled)}
+          >
+            <span
+              aria-hidden="true"
+              className={`${
+                enabled ? 'translate-x-5' : 'translate-x-0'
+              } inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
+            />
+          </button>
+          {label && labelSide === 'right' && (
+            <span className={`ml-3 text-sm font-medium ${enabled ? 'text-dorado' : 'text-blanco/70'} font-sans`}>
+              {label}
+            </span>
+          )}
+        </label>
+      );
+    };
+
+    /**
+     * Modal rediseñado (Req 3.4)
+     */
+    const Modal = ({ isOpen, onClose, title, children, size = "lg" }) => {
+      if (!isOpen) return null;
+      
+      const sizeClasses = {
+        md: 'max-w-md',
+        lg: 'max-w-lg',
+        xl: 'max-w-xl',
+        '2xl': 'max-w-2xl', 
+      };
+
+      // Efecto Glassmorphism oscuro (Req 3.4)
+      const glassmorphismDark = {
+          backgroundColor: 'rgba(13, 34, 64, 0.75)', // azul-oscuro al 75%
+          backdropFilter: 'blur(12px)',
+          border: '1px solid rgba(177, 169, 110, 0.2)', // borde dorado/20
+      };
+
+      return (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 transition-opacity duration-300"
+          style={{ backgroundColor: 'rgba(0, 0, 0, 0.75)' }}
+          onClick={onClose}
+        >
+          <div
+            className={`w-full overflow-hidden rounded-2xl shadow-suave ${sizeClasses[size] || 'max-w-lg'}`}
+            style={glassmorphismDark}
+            onClick={(e) => e.stopPropagation()} 
+          >
+            {/* Cabecera del Modal (Req 3.4) */}
+            <div className="flex items-center justify-between px-6 py-5" style={{ borderBottom: `1px solid ${COLORES_BRANDING.dorado}30` }}>
+              <h3 className="font-display text-2xl font-semibold tracking-wide text-dorado">
+                {title}
+              </h3>
+              <button
+                onClick={onClose}
+                className="rounded-full p-1 text-blanco/70 transition-colors duration-150 hover:bg-blanco/20"
+                aria-label="Cerrar modal"
+              >
+                <IconClose className="h-6 w-6" />
+              </button>
+            </div>
+            {/* Contenido del Modal */}
+            <div className="p-6">
+              {children}
+            </div>
+          </div>
+        </div>
+      );
+    };
+    
+    /**
+     * Componente Modal de Confirmación
+     */
+    const ConfirmModal = ({ isOpen, onClose, onConfirm, title, message }) => {
+        if (!isOpen) return null;
+
+        const handleConfirm = () => {
+            onConfirm();
+            onClose();
+        };
+
+        return (
+            <Modal isOpen={isOpen} onClose={onClose} title={title} size="md">
+                <p className="font-sans text-blanco/80 mb-6">{message}</p>
+                <div className="flex justify-end space-x-3">
+                    <Button variant="secundario" onClick={onClose}>
+                        Cancelar
+                    </Button>
+                    <Button variant="error" onClick={handleConfirm} icon={IconTrash}>
+                        Confirmar Eliminación
+                    </Button>
+                </div>
+            </Modal>
+        );
+    };
+
+
+    /**
+     * Panel (Wrapper) con estilo Glassmorphism (Req 3.4)
+     */
+    const GlassPanel = ({ children, className = "" }) => {
+        // Efecto Glassmorphism claro (Req 3.4)
+        const glassmorphismLight = {
+            backgroundColor: 'rgba(255, 255, 255, 0.7)', // blanco al 70%
+            backdropFilter: 'blur(12px)',
+            border: '1px solid rgba(177, 169, 110, 0.2)', // borde dorado/20
+        };
+
+        return (
+            <div
+                className={`rounded-2xl shadow-suave ${className}`}
+                style={glassmorphismLight}
+            >
+                {children}
+            </div>
+        );
+    };
+
+    
+    // --- Iconografía SVG (v12) ---
+
+    const IconDashboard = ({ className = "w-6 h-6" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-6l-2 2M15 17v-6l2 2m-6-10v6l2-2m-2 6v6l2-2M9 3v6l-2-2M15 3v6l2-2m-6 10v6l-2-2m2 6v-6l-2 2" /></svg>
+    );
+    const IconProyectos = ({ className = "w-6 h-6" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+    );
+    const IconConfiguracion = ({ className = "w-6 h-6" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+    );
+    const IconLogout = ({ className = "w-6 h-6" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+    );
+    const IconHamburguesa = ({ className = "w-6 h-6" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
+    );
+    const IconClose = ({ className = "w-6 h-6" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+    );
+    const IconCliente = ({ className = "w-5 h-5" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M5 5h14v8H5V5z" /></svg>
+    );
+    const IconPM = ({ className = "w-5 h-5" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+    );
+    const IconEstatus = ({ className = "w-5 h-5" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+    );
+    const IconAplicacion = ({ className = "w-5 h-5" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" /></svg>
+    );
+    const IconTicket = ({ className = "w-5 h-5" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 5v2m0 4v2m0 4v2M5 5h14a2 2 0 012 2v3a2 2 0 000 4v3a2 2 0 01-2 2H5a2 2 0 01-2-2v-3a2 2 0 000-4V7a2 2 0 012-2z" /></svg>
+    );
+    const IconHoras = ({ className = "w-5 h-5" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+    );
+    const IconPencil = ({ className = "w-5 h-5" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.5L15.232 5.232z" /></svg>
+    );
+    const IconTrash = ({ className = "w-5 h-5" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+    );
+    const IconChevronDown = ({ className = "w-5 h-5" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+    );
+    const IconUpload = ({ className = "w-6 h-6" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+    );
+    const IconDownload = ({ className = "w-5 h-5" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+    );
+    const IconFileExcel = ({ className = "w-5 h-5" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+    );
+    const IconSpinner = ({ className = "w-5 h-5" }) => (
+      <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 3v3m0 12v3m9-9h-3M6 12H3m16.93-7.93l-2.12 2.12M9.17 14.83l-2.12 2.12M14.83 9.17l2.12-2.12M7.05 7.05l-2.12-2.12" /></svg>
+    );
+    const IconChevronLeft = ({ className = "w-6 h-6" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+    );
+    const IconChevronRight = ({ className = "w-6 h-6" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+    );
+    const IconRefresh = ({ className = "w-5 h-5" }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 0020.933 12M5.07 12a8.001 8.001 0 0115.062-2.316m-4.04 5.761A4 4 0 0012 20h0a4 4 0 003.582-5.762M12 4h0a4 4 0 00-3.582 5.762" /></svg>
+    );
+
+
+    // --- Componentes del Layout (v12-Redesign) ---
+
+    /**
+     * Header (v12)
+     */
+    const Header = ({ onMenuToggle, isSidebarCollapsed, onMobileNavigate, onMobileToggle, isMobileMenuOpen }) => {
+      const { user, signOut } = useAuth();
+      
+      return (
+        <header 
+            className="relative z-30 flex h-20 w-full flex-shrink-0 items-center justify-between px-4 sm:px-6 lg:px-8"
+            style={{
+                backgroundColor: 'rgba(255, 255, 255, 0.7)', // glassmorphism
+                backdropFilter: 'blur(12px)',
+                borderBottom: '1px solid rgba(177, 169, 110, 0.2)', // borde dorado/20
+            }}
+        >
+            {/* Logo (solo visible si el sidebar está colapsado Y EN DESKTOP) */}
+            <div className={`hidden items-center transition-opacity duration-300 ${!isSidebarCollapsed ? 'lg:opacity-0' : 'lg:opacity-100'}`}>
+                <h1 className="font-display text-3xl font-bold tracking-wide text-azul-oscuro">
+                    BlatoRH<span className="text-dorado">.</span>
+                </h1>
+            </div>
+            
+            {/* Logo (solo visible en MÓVIL) */}
+             <div className="flex items-center lg:hidden">
+                <h1 className="font-display text-3xl font-bold tracking-wide text-azul-oscuro">
+                    BlatoRH<span className="text-dorado">.</span>
+                </h1>
+            </div>
+
+            {/* Botón Hamburguesa para móvil */}
+            <button
+                onClick={onMobileToggle}
+                className="text-azul-oscuro hover:text-dorado lg:hidden"
+                aria-label="Toggle mobile menu"
+                aria-expanded={isMobileMenuOpen}
+            >
+                {isMobileMenuOpen ? <IconClose /> : <IconHamburguesa />}
+            </button>
+
+            {/* Botón Toggle para Desktop (oculto en móvil) */}
+            <button
+                onClick={onMenuToggle}
+                className="absolute left-0 top-1/2 -translate-y-1/2 hidden rounded-full bg-white/50 p-1.5 text-azul-oscuro shadow-sm transition-all duration-300 hover:bg-white lg:block"
+                style={{ transform: `translateY(-50%) translateX(${isSidebarCollapsed ? '4.5rem' : '15.5rem'})`}} // w-20 o w-64
+                aria-label={isSidebarCollapsed ? "Expandir menú" : "Colapsar menú"}
+            >
+                {isSidebarCollapsed ? <IconChevronRight className="h-5 w-5" /> : <IconChevronLeft className="h-5 w-5" />}
+            </button>
+
+            {/* Espaciador (solo en desktop) */}
+            <div className="hidden flex-1 lg:block" />
+
+            {/* Info de Usuario (oculto en móvil) */}
+            <div className="hidden items-center lg:flex">
+                <span className="font-sans text-sm font-medium text-texto-principal sm:block">
+                    {user?.email}
+                </span>
+                <button
+                    onClick={signOut}
+                    className="ml-4 rounded-full p-2 text-azul-oscuro transition-colors duration-150 hover:bg-dorado/20"
+                    title="Cerrar Sesión"
+                    aria-label="Cerrar Sesión"
+                >
+                    <IconLogout className="h-5 w-5" />
+                </button>
+            </div>
+
+        </header>
+      );
+    };
+
+    /**
+     * NavItem (v12)
+     */
+    const NavItem = ({ icon, label, isActive, onClick, isCollapsed }) => {
+      const Icon = icon;
+      const ctiveColor = COLORES_BRANDING.dorado;
+      const inactiveColor = COLORES_BRANDING.azulOscuro;
+
+      return (
+        <li>
+          <a
+            href="#"
+            onClick={(e) => {
+              e.preventDefault();
+              onClick();
+            }}
+            className={`group flex items-center rounded-xl p-3 text-sm font-medium transition-all duration-150 ${
+              isActive ? 'bg-dorado/20' : 'hover:bg-dorado/10'
+            } ${isCollapsed ? 'justify-center' : 'justify-start'}`}
+            title={isCollapsed ? label : ""} // Tooltip
+            aria-label={label}
+            role="menuitem"
+            aria-current={isActive ? "page" : undefined}
+          >
+            <Icon
+              className="h-6 w-6 flex-shrink-0"
+              style={{ color: isActive ? activeColor : inactiveColor }}
+            />
+            <span
+              className={`font-display tracking-wide text-lg transition-all duration-150 ${isCollapsed ? 'w-0 opacity-0' : 'w-auto opacity-100 ml-3'}`}
+              style={{
+                color: isActive ? activeColor : inactiveColor,
+                fontWeight: '500',
+              }}
+            >
+              {label} {/* <--- CORRECCIÓN APLICADA AQUÍ */}
+            </span>
+          </a>
+        </li>
+      );
+    };
+
+    /**
+     * Sidebar (v12) - Colapsable
+     */
+    const Sidebar = ({ currentPage, onNavigate, isCollapsed }) => {
+      const { role } = useAuth();
+      const esAdmin = role === 'Admin';
+
+      return (
+        <aside
+          className={`flex h-full flex-col overflow-y-auto bg-transparent px-4 py-6 transition-all duration-300 ease-in-out ${isCollapsed ? 'w-20' : 'w-64'}`}
+          aria-label="Main navigation"
+        >
+          {/* Logo */}
+          <div className={`flex items-center transition-all duration-150 ${isCollapsed ? 'justify-center' : 'px-4'}`}>
+            <h1 className={`font-display text-4xl font-bold tracking-wide text-azul-oscuro transition-all ${isCollapsed ? 'text-2xl' : 'text-4xl'}`}>
+              B<span className="text-dorado">.</span>
+              {!isCollapsed && <span className="text-azul-oscuro">RH</span>}
+            </h1>
+          </div>
+
+          {/* Navegación */}
+          <nav className="mt-8 flex-1 space-y-2" role="menu">
+            <NavItem
+              icon={IconDashboard}
+              label="Dashboard"
+              isActive={currentPage === 'dashboard'}
+              onClick={() => onNavigate('dashboard')}
+              isCollapsed={isCollapsed}
+            />
+            <NavItem
+              icon={IconProyectos}
+              label="Proyectos"
+              isActive={currentPage === 'proyectos'}
+              onClick={() => onNavigate('proyectos')}
+              isCollapsed={isCollapsed}
+            />
+            {esAdmin && (
+              <NavItem
+                icon={IconConfiguracion}
+                label="Configuración"
+                isActive={currentPage === 'configuracion'}
+                onClick={() => onNavigate('configuracion')}
+                isCollapsed={isCollapsed}
+              />
+            )}
+          </nav>
+        </aside>
+      );
+    };
+
+    /**
+     * Menú Móvil (v12) - Dropdown
+     */
+    const MobileMenu = ({ isOpen, currentPage, onNavigate }) => {
+        const { role, user, signOut } = useAuth();
+        const esAdmin = role === 'Admin';
+
+        // Usamos una transición simple de altura
+        return (
+            <div 
+                className="absolute top-20 left-0 w-full overflow-hidden bg-white shadow-lg lg:hidden z-20 transition-all duration-300 ease-in-out"
+                style={{
+                    backgroundColor: 'rgba(255, 255, 255, 0.9)', // glassmorphism
+                    backdropFilter: 'blur(12px)',
+                    borderBottom: '1px solid rgba(177, 169, 110, 0.2)',
+                    maxHeight: isOpen ? '100vh' : '0px', // Animación de altura
+                }}
+            >
+                <nav className="space-y-1 p-4">
+                   <NavItem
+                      icon={IconDashboard}
+                      label="Dashboard"
+                      isActive={currentPage === 'dashboard'}
+                      onClick={() => onNavigate('dashboard')}
+                      isCollapsed={false}
+                    />
+                    <NavItem
+                      icon={IconProyectos}
+                      label="Proyectos"
+                      isActive={currentPage === 'proyectos'}
+                      onClick={() => onNavigate('proyectos')}
+                      isCollapsed={false}
+                    />
+                    {esAdmin && (
+                      <NavItem
+                        icon={IconConfiguracion}
+                        label="Configuración"
+                        isActive={currentPage === 'configuracion'}
+                        onClick={() => onNavigate('configuracion')}
+                        isCollapsed={false}
+                      />
+                    )}
+                </nav>
+                {/* Info de usuario en móvil */}
+                <div className="border-t border-dorado/20 p-4">
+                    <p className="font-sans text-sm font-medium text-texto-principal mb-2">
+                        {user?.email}
+                    </p>
+                    <Button 
+                        variant="secundario" 
+                        onClick={signOut} 
+                        icon={IconLogout}
+                        className="w-full bg-azul-oscuro/10 text-azul-oscuro"
+                    >
+                        Cerrar Sesión
+                    </Button>
+                </div>
+            </div>
+        );
+    };
+
+
+    // --- Páginas de la Aplicación ---
+
+    // --- 1. Página: Dashboard (v12) ---
+
+    const KpiCard = ({ title, value, unit, icon, isLoading }) => {
+      const Icon = icon;
+      const nimatedValue = useCountUp(value);
+
+      return (
+        <GlassPanel className="p-5">
+          <div className="flex items-center">
+            <div 
+              className="flex-shrink-0 rounded-xl p-3"
+              style={{ backgroundColor: 'rgba(177, 169, 110, 0.15)' }} // Fondo dorado claro
+            >
+              <Icon className="h-6 w-6 text-dorado" />
+            </div>
+            <div className="ml-5 w-0 flex-1">
+              <dl>
+                <dt className="truncate font-display text-sm font-medium tracking-wide text-texto-gris">
+                  {title}
+                </dt>
+                <dd className="flex items-baseline">
+                  {isLoading ? (
+                    <div className="mt-1 h-8 w-24 animate-pulse rounded-md bg-gris-medio"></div>
+                  ) : (
+                    <>
+                      <span className="font-display text-4xl font-semibold tracking-wide text-azul-oscuro">
+                        {animatedValue}
+                      </span>
+                      {unit && (
+                        <span className="ml-2 font-sans text-sm font-medium text-texto-gris">
+                          {unit}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </dd>
+              </dl>
+            </div>
+          </div>
+        </GlassPanel>
+      );
+    };
+
+    /**
+     * Lista/Tabla del Dashboard (v12)
+     */
+    const DashboardList = ({ title, titleElement, items, columns, renderItem, isLoading }) => (
+      <GlassPanel className="overflow-hidden">
+        {/* Cabecera de la Lista */}
+        <div
+          className="rounded-t-2xl px-6 py-4 flex justify-between items-center"
+          style={{
+            backgroundColor: 'rgba(13, 34, 64, 0.9)', // azul-oscuro 90%
+          }}
+        >
+          {titleElement ? titleElement : (
+            <h3 className="font-display text-2xl font-semibold tracking-wide text-dorado">
+              {title}
+            </h3>
+          )}
+        </div>
+        
+        {/* Contenido de la Lista */}
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-dorado/10">
+            <thead style={{ backgroundColor: 'rgba(255, 255, 255, 0.5)' }}>
+              <tr>
+                {columns.map((col) => (
+                  <th
+                    key={col.key}
+                    scope="col"
+                    className="px-6 py-3 text-left font-display text-xs font-bold uppercase tracking-wider text-texto-gris"
+                    style={{ minWidth: col.minWidth || 'auto' }} // Permitir min-width para algunas columnas
+                  >
+                    {col.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-dorado/10">
+              {isLoading ? (
+                [...Array(3)].map((_, i) => (
+                  <tr key={i}>
+                    {columns.map((col) => (
+                      <td key={col.key} className="px-6 py-4">
+                        <div className="h-4 w-full animate-pulse rounded-md bg-gris-medio"></div>
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              ) : items.length > 0 ? (
+                items.map(renderItem)
+              ) : (
+                <tr>
+                  <td colSpan={columns.length} className="px-6 py-4 text-center font-sans text-sm text-texto-gris">
+                    No hay datos para mostrar.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </GlassPanel>
+    );
+
+    /**
+     * Filtros del Dashboard (v12)
+     */
+    const FiltroCascadaDashboard = ({ onFiltroAplicado, isLoading }) => {
+      const { catalogos } = useCatalogosData();
+      const [isProcessing, setIsProcessing] = useState(false);
+      
+      // Estado para los filtros seleccionados
+      const [filtros, setFiltros] = useState({
+        clienteId: 'todos',
+        proyectoId: 'todos',
+        pmId: 'todos',
+        estatusId: 'todos',
+        aplicacionId: 'todos', 
+      });
+
+      // Estado de las opciones disponibles
+      const [opciones, setOpciones] = useState({
+        clientes: [],
+        proyectos: [],
+        pms: [],
+        estatus: [],
+        aplicaciones: [],
+      });
+      
+      // Carga inicial de datos
+      useEffect(() => {
+          setOpciones({
+            clientes: catalogos.clientes,
+            proyectos: [], // Proyectos se carga dinámicamente
+            pms: catalogos.pms,
+            estatus: catalogos.estatus_proyectos,
+            aplicaciones: catalogos.aplicaciones,
+          });
+      }, [catalogos]);
+
+      // Lógica de Cascada (Simulada por ahora, idealmente se hace en BD)
+      const handleClienteChange = async (e) => {
+        const nuevoClienteId = e.target.value;
+        
+        setFiltros({
+          clienteId: nuevoClienteId,
+          proyectoId: 'todos',
+          pmId: 'todos',
+          estatusId: 'todos',
+          aplicacionId: 'todos', 
+        });
+
+        // Simular carga de proyectos para ese cliente
+        if (nuevoClienteId === 'todos') {
+            setOpciones(prev => ({ ...prev, proyectos: [] }));
+        } else {
+            // Usar la tabla 'proyectos' y la columna 'nombre_proyecto'
+            const { data } = await supabase.from('proyectos').select('id, nombre_proyecto').eq('cliente_id', parseInt(nuevoClienteId, 10));
+            setOpciones(prev => ({ ...prev, proyectos: data || [] }));
+        }
+      };
+      
+      const handleFiltroChange = (e) => {
+        const { name, value } = e.target;
+        setFiltros(prevFiltros => ({
+          ...prevFiltros,
+          [name]: value,
+        }));
+      };
+
+      const plicarFiltros = async () => {
+        setIsProcessing(true);
+        try {
+            await onFiltroAplicado(filtros); // Espera a que el padre procese
+        } catch (error) {
+            console.error("Error aplicando filtros:", error);
+        }
+        setIsProcessing(false);
+      };
+
+      return (
+        <GlassPanel className="mb-6 p-4">
+          <div className="grid grid-cols-1 gap-x-6 gap-y-4 md:grid-cols-3 lg:grid-cols-6">
+            <FormSelectConIcono
+              label="Cliente"
+              icon={IconCliente}
+              name="clienteId"
+              value={filtros.clienteId}
+              onChange={handleClienteChange}
+              disabled={isLoading || isProcessing}
+            >
+              <option value="todos">Todos los Clientes</option>
+              {opciones.clientes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+            </FormSelectConIcono>
+
+            <FormSelectConIcono
+              label="Proyecto"
+              icon={IconTicket}
+              name="proyectoId"
+              value={filtros.proyectoId}
+              onChange={handleFiltroChange}
+              disabled={isLoading || isProcessing || filtros.clienteId === 'todos'}
+            >
+              <option value="todos">Todos los Proyectos</option>
+              {opciones.proyectos.map(p => <option key={p.id} value={p.id}>{`${p.id} - ${p.nombre_proyecto}`}</option>)}
+            </FormSelectConIcono>
+
+            <FormSelectConIcono
+              label="Project Manager"
+              icon={IconPM}
+              name="pmId"
+              value={filtros.pmId}
+              onChange={handleFiltroChange}
+              disabled={isLoading || isProcessing}
+            >
+              <option value="todos">Todos los PMs</option>
+              {opciones.pms.map(pm => <option key={pm.id} value={pm.id}>{pm.nombre_completo}</option>)}
+            </FormSelectConIcono>
+
+            <FormSelectConIcono
+              label="Estatus"
+              icon={IconEstatus}
+              name="estatusId"
+              value={filtros.estatusId}
+              onChange={handleFiltroChange}
+              disabled={isLoading || isProcessing}
+            >
+              <option value="todos">Todos los Estatus</option>
+              {opciones.estatus.map(e => <option key={e.id} value={e.id}>{e.nombre}</option>)}
+            </FormSelectConIcono>
+
+            <FormSelectConIcono
+              label="Aplicación"
+              icon={IconAplicacion}
+              name="aplicacionId" 
+              value={filtros.aplicacionId}
+              onChange={handleFiltroChange}
+              disabled={isLoading || isProcessing}
+            >
+              <option value="todos">Todas las Aplicaciones</option>
+              {opciones.aplicaciones.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+            </FormSelectConIcono>
+
+            <div className="flex items-end">
+              <Button 
+                onClick={aplicarFiltros} 
+                variant="dorado" 
+                className="w-full"
+                isLoading={isProcessing}
+                loadingText="Filtrando..."
+                disabled={isLoading}
+              >
+                Filtrar
+              </Button>
+            </div>
+          </div>
+        </GlassPanel>
+      );
+    };
+
+
+    const PageDashboard = () => {
+      const { catalogos, loadingCatalogos } = useCatalogosData();
+      const [isLoading, setIsLoading] = useState(true);
+
+      // Estado para los KPIs
+      const [kpiData, setKpiData] = useState({
+        proyectosActivos: 0,
+        horasContratadas: 0,
+        horasInsumidas: 0,
+        saldoHoras: 0,
+      });
+      
+      // Estado para las *listas*
+      const [listasData, setListasData] = useState({
+        cargaPorPM: [],
+      });
+      
+      const [mostrarSoloEnRiesgo, setMostrarSoloEnRiesgo] = useState(true); 
+      const [proyectosFiltrados, setProyectosFiltrados] = useState([]);
+
+      // Carga inicial de datos (real)
+      useEffect(() => {
+        if (supabase && !loadingCatalogos) {
+          handleFiltroAplicado({}); // {} = sin filtros
+        }
+      }, [supabase, loadingCatalogos]); // Depende de Supabase y de que los catálogos carguen
+
+      // Función que recalcula el Dashboard (Real)
+      const handleFiltroAplicado = async (filtros) => {
+        if (!supabase) return;
+
+        setIsLoading(true);
+
+        let query = supabase
+            .from('proyectos') // Tabla 'proyectos'
+            .select(`
+                id, nombre_proyecto, cliente_id, pm_id, estatus_id, aplicacion_id, 
+                hs_proyecto, hs_insumidas
+            `); 
+
+        // Los filtros deben ser parseados a números si son IDs, o mantener 'todos' para que la condición no se aplique
+        const clienteId = castIdSafe(filtros.clienteId);
+        const pmId = castIdSafe(filtros.pmId);
+        const estatusId = castIdSafe(filtros.estatusId);
+        const plicacionId = castIdSafe(filtros.aplicacionId);
+        const proyectoId = castIdSafe(filtros.proyectoId); // No parsear a int si puede ser UUID
+
+        if (clienteId) {
+          query = query.eq('cliente_id', parseInt(clienteId, 10));
+        }
+        if (proyectoId) {
+          // El proyectoId es el ID principal (UUID o string)
+          query = query.eq('id', proyectoId);
+        }
+        if (pmId) {
+          query = query.eq('pm_id', parseInt(pmId, 10));
+        }
+        if (estatusId) {
+          query = query.eq('estatus_id', parseInt(estatusId, 10));
+        }
+        if (aplicacionId) {
+          query = query.eq('aplicacion_id', parseInt(aplicacionId, 10));
+        }
+
+        let { data: proyectosFiltradosResultado, error } = await query;
+
+        if (error) {
+            console.error("Error al filtrar proyectos:", error);
+            setIsLoading(false);
+            return;
+        }
+        
+        // Recalcular saldo y riesgo en el frontend
+        proyectosFiltradosResultado = proyectosFiltradosResultado.map(p => {
+            const saldo = (p.hs_proyecto || 0) - (p.hs_insumidas || 0);
+            return {
+                ...p,
+                saldo: saldo,
+                // Riesgo: Saldo negativo
+                en_riesgo: saldo < 0 
+            };
+        });
+
+        setProyectosFiltrados(proyectosFiltradosResultado);
+
+        // --- CORRECCIÓN CRÍTICA: Cálculo de Proyectos Activos (Todos menos Finalizado/Cerrado) ---
+        // Se define una lista de IDs de estatus a EXCLUIR
+        const estatusExcluirIds = catalogos.estatus_proyectos.filter(e => {
+            const nombre = e.nombre.toLowerCase();
+            return nombre.includes('finalizado') || nombre.includes('cerrado') || nombre.includes('terminado');
+        }).map(e => e.id);
+
+        const proyectosActivosCount = proyectosFiltradosResultado.filter(p => 
+            !estatusExcluirIds.includes(p.estatus_id)
+        ).length;
+
+        // Recalculamos KPIs
+        const kpis = {
+          proyectosActivos: proyectosActivosCount, 
+          horasContratadas: proyectosFiltradosResultado.reduce((sum, p) => sum + (p.hs_proyecto || 0), 0),
+          horasInsumidas: proyectosFiltradosResultado.reduce((sum, p) => sum + (p.hs_insumidas || 0), 0),
+          saldoHoras: proyectosFiltradosResultado.reduce((sum, p) => sum + (p.saldo || 0), 0),
+        };
+        setKpiData(kpis);
+
+        // Recalculamos Carga de PM
+        const pmsConCarga = catalogos.pms.map(pm => {
+          const proyectosPM = proyectosFiltradosResultado.filter(p => p.pm_id === pm.id);
+          return {
+            id: pm.id,
+            nombre: pm.nombre_completo,
+            proyectosAsignados: proyectosPM.length,
+            horasAsignadas: proyectosPM.reduce((sum, p) => sum + (p.hs_proyecto || 0), 0),
+          };
+        }).filter(pm => pm.proyectosAsignados > 0);
+
+        setListasData({ cargaPorPM: pmsConCarga });
+        setIsLoading(false);
+      };
+
+      // 5. Derivamos la lista de "Proyectos en Riesgo"
+      const proyectosEnRiesgoVisibles = useMemo(() => {
+        if (mostrarSoloEnRiesgo) {
+          return proyectosFiltrados.filter(p => p.en_riesgo); // Solo negativos/en riesgo
+        }
+        return proyectosFiltrados; // Todos
+      }, [proyectosFiltrados, mostrarSoloEnRiesgo]);
+      
+      // Columnas para las listas
+      const columnasRiesgo = [
+        { key: 'cliente', label: 'Cliente', minWidth: '150px' },
+        { key: 'nombre_proyecto', label: 'Proyecto (Nombre)', minWidth: '350px' }, // Se eliminó ID Proyecto y se agrandó Nombre
+        { key: 'estatus', label: 'Estatus', minWidth: '100px' },
+        { key: 'saldo', label: 'Saldo (Hs)', minWidth: '100px' },
+        { key: 'pm', label: 'PM', minWidth: '150px' },
+        { key: 'acciones', label: 'Acciones', minWidth: '80px' },
+      ];
+      
+      const columnasPMs = [
+        { key: 'nombre', label: 'Project Manager' },
+        { key: 'proyectos', label: 'Proyectos Asig.' },
+        { key: 'horas', label: 'Horas Totales Asig.' },
+      ];
+
+      // Helper para buscar nombres en catálogos
+      const findInCatalog = (catalog, id) => {
+          if (!catalog || !id) return 'N/A';
+          const item = catalog.find(c => c.id === id);
+          return item?.nombre || item?.nombre_completo || 'N/A';
+      };
+
+      const renderProyectoRiesgo = (item) => {
+        const cliente = findInCatalog(catalogos.clientes, item.cliente_id);
+        const estatus = findInCatalog(catalogos.estatus_proyectos, item.estatus_id);
+        const pm = findInCatalog(catalogos.pms, item.pm_id);
+        const saldoColor = item.en_riesgo ? 'text-error-suave' : 'text-exito-suave';
+        
+        return (
+          <tr key={item.id} className="hover:bg-dorado/5 font-sans">
+            <td className="px-6 py-3 whitespace-nowrap text-sm text-texto-gris">{cliente}</td>
+            {/* *** AJUSTE: Eliminar el ID del proyecto en el nombre de la columna *** */}
+            <td className="px-6 py-3 text-sm text-texto-gris">
+                <span className="font-medium text-texto-principal">{item.nombre_proyecto}</span>
+            </td>
+            {/* ------------------------------------------------------------------------------------- */}
+            <td className="px-6 py-3 whitespace-nowrap text-sm text-texto-gris">{estatus}</td>
+            <td className={`px-6 py-3 whitespace-nowrap text-sm font-bold ${saldoColor}`}>
+              {item.saldo}
+            </td>
+            <td className="px-6 py-3 whitespace-nowrap text-sm text-texto-gris">{pm}</td>
+            <td className="px-6 py-3 whitespace-nowrap text-sm font-medium">
+              <button 
+                onClick={() => alert(`Simulación: Editar proyecto ${item.id}.`)} 
+                className="transition-colors text-dorado hover:text-dorado-darker" 
+                title="Editar Proyecto"
+              >
+                <IconPencil className="w-5 h-5" />
+              </button>
+            </td>
+          </tr>
+        );
+      };
+      
+      const renderCargaPM = (item) => (
+        <tr key={item.id} className="hover:bg-dorado/5 font-sans">
+          <td className="px-6 py-3 whitespace-nowrap text-sm font-medium text-texto-principal">{item.nombre}</td>
+          <td className="px-6 py-3 whitespace-nowrap text-sm text-texto-gris">{item.proyectosAsignados}</td>
+          <td className="px-6 py-3 whitespace-nowrap text-sm text-texto-gris">{item.horasAsignadas}</td>
+        </tr
+        >
+      );
+
+      // Elemento de Título para la lista de Riesgo (con el Toggle)
+      const riesgoTitleElement = (
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center w-full gap-2">
+          <h3 className="font-display text-2xl font-semibold tracking-wide text-dorado">
+            Foco de Atención: Proyectos
+          </h3>
+          <ToggleSwitch
+            enabled={mostrarSoloEnRiesgo}
+            onChange={setMostrarSoloEnRiesgo}
+            label={mostrarSoloEnRiesgo ? 'Solo en Riesgo' : 'Mostrando Todos'}
+            labelSide="left"
+          />
+        </div>
+      );
+
+      return (
+        <div className="space-y-6">
+          <h2
+            className="font-display text-5xl font-bold tracking-wider text-azul-oscuro text-center"
+          >
+            Dashboard de Proyectos
+          </h2>
+
+          {/* --- Filtros --- */}
+          <FiltroCascadaDashboard onFiltroAplicado={handleFiltroAplicado} isLoading={isLoading} />
+
+          {/* --- KPIs --- */}
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+            <KpiCard title="Proyectos Activos" value={kpiData.proyectosActivos} icon={IconProyectos} isLoading={isLoading} />
+            <KpiCard title="Horas Contratadas" value={kpiData.horasContratadas} unit="hs" icon={IconHoras} isLoading={isLoading} />
+            <KpiCard title="Horas Insumidas" value={kpiData.horasInsumidas} unit="hs" icon={IconHoras} isLoading={isLoading} />
+            <KpiCard title="Saldo de Horas" value={kpiData.saldoHoras} unit="hs" icon={IconHoras} isLoading={isLoading} />
+          </div>
+
+          {/* --- Listas Detalladas --- */}
+          <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
+            <DashboardList
+              titleElement={riesgoTitleElement} 
+              items={proyectosEnRiesgoVisibles} 
+              columns={columnasRiesgo}
+              renderItem={renderProyectoRiesgo}
+              isLoading={isLoading}
+            />
+            <DashboardList
+              title="Carga de Trabajo (PMs)"
+              items={listasData.cargaPorPM}
+              columns={columnasPMs}
+              renderItem={renderCargaPM}
+              isLoading={isLoading}
+            />
+          </div>
+        </div>
+      );
+    };
+
+
+    // --- 2. Página: Proyectos ---
+
+    // *** Aquí comienza la implementación parcial de PageProyectos y sus subcomponentes ***
+
+    // --- Carga Masiva de Proyectos (XLSX) ---
+    const CargaMasivaProyectosModal = ({ isOpen, onClose, onImportar }) => {
+      const { catalogos } = useCatalogosData();
+      const [file, setFile] = useState(null);
+      const [validationResults, setValidationResults] = useState({ validos: [], errores: [] });
+      const [errorGeneral, setErrorGeneral] = useState(null);
+      const [success, setSuccess] = useState(null);
+      const [isImporting, setIsImporting] = useState(false);
+      const [isMounted, setIsMounted] = useState(false); 
+      const fileInputRef = useRef(null); // Ref para resetear el input
+
+      const { showToast } = useToast();
+
+      useEffect(() => {
+        setIsMounted(true);
+        return () => setIsMounted(false);
+      }, []);
+
+      const headers = [
+        'proyecto_id', 
+        'nombre_proyecto', 
+        'cliente_nombre', 
+        'pm_nombre', 
+        'estatus_nombre', 
+        'aplicacion_nombre', 
+        'fecha_inicio', // YYYY-MM-DD
+        'fecha_cierre', // YYYY-MM-DD
+        'hs_proyecto', 
+        'hs_insumidas'
+      ];
+      const fileName = 'proyectos_template.xlsx';
+
+      // Función para generar y descargar el template XLSX
+      const handleDownloadTemplate = () => {
+        const ws_data = [ headers ];
+        const ws = XLSX.utils.aoa_to_sheet(ws_data);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Proyectos");
+        XLSX.writeFile(wb, fileName);
+      };
+      
+      // Reseteamos el estado al cerrar
+      const handleClose = () => {
+        setFile(null);
+        setErrorGeneral(null);
+        setSuccess(null);
+        setValidationResults({ validos: [], errores: [] });
+        setIsImporting(false);
+        if (fileInputRef.current) fileInputRef.current.value = null; // Resetear input
+        onClose();
+      };
+      
+      // Función para manejar la selección de archivo y VALIDARLO
+      const handleFileChange = (e) => {
+        const selectedFile = e.target.files[0];
+        setErrorGeneral(null);
+        setSuccess(null);
+        setValidationResults({ validos: [], errores: [] });
+        
+        if (!selectedFile) {
+          setFile(null);
+          return;
+        }
+        
+        if (!selectedFile.name.endsWith('.xlsx')) {
+          setErrorGeneral('Error: El archivo debe ser de tipo .xlsx');
+          setFile(null);
+          return;
+        }
+        
+        setFile(selectedFile);
+        
+        // Validar el archivo
+        const reader = new FileReader();
+        reader.onload = function(event) {
+          try {
+            const data = event.target.result;
+            const workbook = XLSX.read(data, { type: 'binary' });
+            const sheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[sheetName];
+            const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false, dateNF: 'yyyy-mm-dd' }); // Formatear fechas
+
+            if (jsonData.length < 2) {
+              if (isMounted) setErrorGeneral("Error: El archivo está vacío o solo tiene cabeceras.");
+              return;
+            }
+
+            // 2. Validar Cabeceras
+            const fileHeaders = jsonData[0].map(h => String(h).trim());
+            const expectedHeaders = headers.map(h => h.trim());
+            
+            if (fileHeaders.length !== expectedHeaders.length || !fileHeaders.every((h, i) => h === expectedHeaders[i])) {
+              if (isMounted) setErrorGeneral(`Error: Cabeceras no coinciden. Se esperaba: "${expectedHeaders.join(', ')}". Se recibió: "${fileHeaders.join(', ')}"`);
+              return;
+            }
+            
+            // 3. Validar cada Fila
+            const { clientes, pms, estatus_proyectos, aplicaciones } = catalogos;
+            let nuevosRegistrosValidos = [];
+            let erroresDeValidacion = [];
+            const dataRows = jsonData.slice(1);
+
+            for (let i = 0; i < dataRows.length; i++) {
+                const lineaNro = i + 2;
+                const rowArray = dataRows[i];
+                if (rowArray.length === 0) continue; // Saltar filas vacías
+
+                const rowData = Object.fromEntries(headers.map((h, index) => [h, rowArray[index] ? String(rowArray[index]).trim() : '']));
+
+                let rowError = null;
+
+                // *** CORRECCIÓN CRÍTICA: proyecto_id puede ser vacío/null ***
+                const proyectoId = rowData.proyecto_id || null;
+                
+                // Validar y encontrar IDs
+                const cliente = clientes.find(c => c.nombre.toLowerCase() === rowData.cliente_nombre.toLowerCase());
+                const pm = pms.find(p => p.nombre_completo.toLowerCase() === rowData.pm_nombre.toLowerCase()); // Corregido a nombre_completo
+                const est = estatus_proyectos.find(e => e.nombre.toLowerCase() === rowData.estatus_nombre.toLowerCase()); // Corregido
+                const pp = aplicaciones.find(a => a.nombre.toLowerCase() === rowData.aplicacion_nombre.toLowerCase());
+
+                if (!cliente) {
+                  rowError = `Línea ${lineaNro}: No se encontró el cliente "${rowData.cliente_nombre}".`;
+                } else if (!pm) {
+                  rowError = `Línea ${lineaNro}: No se encontró el PM "${rowData.pm_nombre}".`;
+                } else if (!est) {
+                  rowError = `Línea ${lineaNro}: No se encontró el Estatus "${rowData.estatus_nombre}".`;
+                } else if (!app) {
+                  rowError = `Línea ${lineaNro}: No se encontró la Aplicación "${rowData.aplicacion_nombre}".`;
+                }
+                // Nota: No se valida `proyectoId` aquí. Se valida que no esté duplicado en la base de datos durante la importación.
+
+                if (rowError) {
+                  erroresDeValidacion.push(rowError);
+                } else {
+                  // Si todo es válido, creamos el objeto Proyecto
+                  const horasTotalNum = parseInt(rowData.hs_proyecto, 10) || 0;
+                  const horasInsumidasNum = parseInt(rowData.hs_insumidas, 10) || 0;
+
+                  nuevosRegistrosValidos.push({
+                    id: proyectoId, // Puede ser null o un valor proporcionado
+                    nombre_proyecto: rowData.nombre_proyecto, // *** CORRECCIÓN ***
+                    cliente_id: cliente.id,
+                    pm_id: pm.id,
+                    estatus_id: est.id,
+                    aplicacion_id: app.id, // *** CORRECCIÓN ***
+                    fecha_inicio: rowData.fecha_inicio || null,
+                    fecha_cierre: rowData.fecha_cierre || null,
+                    hs_proyecto: horasTotalNum, // *** CORRECCIÓN ***
+                    hs_insumidas: horasInsumidasNum, // *** CORRECCIÓN ***
+                  });
+                }
+            } // fin del loop
+            
+            // *** CORRECCIÓN: Añadir chequeo de isMounted ***
+            if (isMounted) {
+                setValidationResults({ validos: nuevosRegistrosValidos, errores: erroresDeValidacion });
+                
+                if(erroresDeValidacion.length > 0 && nuevosRegistrosValidos.length > 0) {
+                  setSuccess(`Validación completada: ${nuevosRegistrosValidos.length} registros válidos. ${erroresDeValidacion.length} errores.`);
+                } else if (erroresDeValidacion.length > 0) {
+                   setErrorGeneral(`Validación fallida: Se encontraron ${erroresDeValidacion.length} errores.`);
+                } else {
+                  setSuccess(`¡Archivo validado! ${nuevosRegistrosValidos.length} registros listos para importar.`);
+                }
+            }
+
+          } catch (err) {
+              console.error("Error leyendo XLSX:", err);
+              // *** CORRECCIÓN: Añadir chequeo de isMounted ***
+              if (isMounted) setErrorGeneral("Error: No se pudo leer el archivo. Asegúrese de que sea un .xlsx válido.");
+          }
+        };
+        
+        reader.readAsBinaryString(selectedFile);
+      };
+      
+      const handleImportar = async () => {
+        if (validationResults.validos.length === 0) {
+            showToast("No hay registros válidos para importar.", 'error');
+            return;
+        }
+        
+        setIsImporting(true);
+        
+        try {
+            // onImportar es la función del padre que hace el insert
+            await onImportar(validationResults.validos); 
+            
+            // Solo si sigue montado
+            if(isMounted) {
+                showToast(`¡Éxito! Se importaron ${validationResults.validos.length} proyectos.`, 'success');
+                handleClose();
+            }
+
+        } catch (error) {
+            console.error("Error en handleImportar (proyectos):", error);
+            if(isMounted) {
+                showToast(`Error al importar: ${error.message}`, 'error');
+                // *** CORRECCIÓN: Restablecer setIsImporting a false en el catch ***
+                setIsImporting(false); 
+            }
+        }
+        // *** CORRECCIÓN: Se elimina el finally aquí, ya que el catch maneja el error y el éxito llama a handleClose ***
+      };
+
+      return (
+        <Modal isOpen={isOpen} onClose={handleClose} title="Carga Masiva de Proyectos" size="xl">
+          <div className="space-y-6">
+            {/* Paso 1: Descargar */}
+            <div>
+              <h4 className="font-display text-lg font-semibold tracking-wide text-blanco">Paso 1: Descargar Template (.xlsx)</h4>
+              <p className="text-sm mt-1 text-blanco/70 font-sans">
+                La columna **proyecto\_id** es opcional. Si la deja vacía, se generará un ID automáticamente.
+              </p>
+              <Button 
+                variant="terciario" 
+                onClick={handleDownloadTemplate} 
+                icon={IconDownload}
+                className="mt-2"
+              >
+                Descargar {fileName}
+              </Button>
+            </div>
+            
+            {/* Separador */}
+            <div className="border-t" style={{ borderColor: 'rgba(177, 169, 110, 0.3)' }} />
+
+            {/* Paso 2: Subir */}
+            <div>
+              <h4 className="font-display text-lg font-semibold tracking-wide text-blanco">Paso 2: Subir Archivo .xlsx</h4>
+              <label 
+                htmlFor="file-upload-proyectos" 
+                className="mt-2 flex cursor-pointer justify-center rounded-xl border-2 border-dashed px-6 py-10 transition-colors hover:border-dorado/80"
+                style={{ borderColor: 'rgba(177, 169, 110, 0.5)' }}
+              >
+                <div className="text-center">
+                  <IconUpload className="mx-auto h-12 w-12" style={{ color: COLORES_BRANDING.textoGris }} />
+                  <div className="mt-4 flex font-sans text-sm leading-6 text-blanco/70">
+                    <span className="font-semibold text-dorado">
+                      {file ? file.name : 'Click para subir un archivo'}
+                    </span>
+                    {!file && <p className="pl-1">o arrástrelo aquí</p>}
+                  </div>
+                  {!file && <p className="text-xs text-blanco/50">Solo .xlsx</p>}
+                </div>
+                <input 
+                    id="file-upload-proyectos" 
+                    name="file-upload-proyectos" 
+                    type="file" 
+                    className="sr-only" 
+                    accept=".xlsx, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    onChange={handleFileChange} 
+                    ref={fileInputRef}
+                />
+              </label>
+            </div>
+            
+            {/* Paso 3: Resultados de Validación */}
+            {errorGeneral && (
+              <div className="rounded-md border p-4" style={{ borderColor: COLORES_BRANDING.errorSuave, backgroundColor: 'rgba(239, 68, 68, 0.1)' }}>
+                <p className="text-sm font-medium font-sans" style={{ color: COLORES_BRANDING.errorSuave }}>{errorGeneral}</p>
+              </div>
+            )}
+            {success && (
+               <div className="rounded-md border p-4" style={{ borderColor: COLORES_BRANDING.exitoSuave, backgroundColor: 'rgba(16, 185, 129, 0.1)' }}>
+                <p className="text-sm font-medium font-sans" style={{ color: COLORES_BRANDING.exitoSuave }}>{success}</p>
+              </div>
+            )}
+            
+            {validationResults.errores.length > 0 && (
+              <div className="mt-4">
+                <h5 className="font-display font-semibold text-error-suave">Detalle de Errores de Validación:</h5>
+                <ul 
+                  className="mt-2 max-h-32 overflow-y-auto rounded-md border p-3 text-sm" 
+                  style={{ borderColor: COLORES_BRANDING.errorSuave, backgroundColor: 'rgba(239, 68, 68, 0.05)', color: COLORES_BRANDING.errorSuave }}
+                >
+                  {validationResults.errores.map((err, index) => (
+                    <li key={index} className="font-mono">{err}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+
+            {/* Paso 4: Importar */}
+            <div className="mt-8 flex justify-end space-x-3">
+              <Button type="button" variant="secundario" onClick={handleClose} disabled={isImporting}>
+                Cancelar
+              </Button>
+              <Button 
+                type="button" 
+                variant="dorado" 
+                onClick={handleImportar}
+                isLoading={isImporting}
+                loadingText="Importando..."
+                disabled={validationResults.validos.length === 0 || isImporting}
+              >
+                Importar {validationResults.validos.length > 0 ? `(${validationResults.validos.length} válidos)` : ''}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      );
+    };
+
+
+    const FormularioProyecto = ({ proyecto, onClose, onSave }) => {
+      const { catalogos } = useCatalogosData();
+      const [isSaving, setIsSaving] = useState(false);
+      const { showToast } = useToast();
+      const [isMounted, setIsMounted] = useState(false); 
+
+      useEffect(() => {
+        setIsMounted(true);
+        return () => setIsMounted(false);
+      }, []);
+      
+      // *** CORRECCIÓN: Generar un UUID si es un proyecto nuevo ***
+      const newProjectId = useMemo(() => generateUUID(), [proyecto]);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setIsSaving(true);
+        const formData = new FormData(e.target);
+        const data = Object.fromEntries(formData.entries());
+        
+        // Determinar el ID del proyecto. Usar el ID existente o el UUID generado para nuevos.
+        const finalId = proyecto?.id || newProjectId; 
+
+        // Validación adicional para ID vacío en creación (aunque el required lo evita)
+        if (!finalId) {
+             if (isMounted) showToast("Error: El ID del proyecto no se pudo generar.", 'error');
+             if (isMounted) setIsSaving(false);
+             return;
+        }
+
+        try {
+            // Mapeo de datos para Supabase
+            const horasTotalNum = parseInt(data.hs_proyecto, 10) || 0;
+            const horasInsumidasNum = parseInt(data.hs_insumidas, 10) || 0;
+            
+            // Convertir IDs de catálogo a enteros
+            const clienteId = parseInt(data.cliente_id, 10);
+            const pmId = parseInt(data.pm_id, 10);
+            const estatusId = parseInt(data.estatus_id, 10);
+            const plicacionId = parseInt(data.aplicacion_id, 10);
+
+            const proyectoData = {
+                id: finalId, // Usamos el ID determinado (existente o UUID)
+                nombre_proyecto: data.nombre_proyecto, 
+                cliente_id: clienteId,
+                pm_id: pmId,
+                estatus_id: estatusId,
+                aplicacion_id: aplicacionId, 
+                fecha_inicio: data.fecha_inicio || null,
+                fecha_cierre: data.fecha_cierre || null,
+                hs_proyecto: horasTotalNum, 
+                hs_insumidas: horasInsumidasNum, 
+            };
+            
+            // console.log("Datos a enviar a Supabase:", proyectoData); // DEBUG: Útil para ver qué se envía
+
+            // onSave es la función del padre que hace el upsert
+            await onSave(proyectoData); 
+
+            // *** CORRECCIÓN: Añadir chequeo de isMounted ***
+            if (isMounted) {
+                showToast(proyecto ? "Proyecto actualizado con éxito" : "Proyecto creado con éxito", 'success');
+                onClose(); // Cierra el modal
+            }
+
+        } catch (error) {
+            console.error("Error al guardar proyecto:", error);
+            // *** CORRECCIÓN: Añadir chequeo de isMounted y mostrar error específico de Supabase si está disponible ***
+            if (isMounted) {
+                 const errorMessage = error.message || error.details || "Error desconocido al guardar el proyecto.";
+                 showToast(`Error al guardar: ${errorMessage}`, 'error');
+            }
+        } finally {
+            // *** CORRECCIÓN: Añadir chequeo de isMounted para restablecer saving ***
+            if (isMounted) {
+                setIsSaving(false);
+            }
+        }
+      };
+      
+      const findSelected = (id, list) => list.find(item => item.id === id);
+
+      return (
+        <form onSubmit={handleSubmit} className="space-y-4">
+            <h3 className="font-display text-2xl font-semibold tracking-wide text-dorado">
+                {proyecto ? "Editar Proyecto" : "Crear Nuevo Proyecto"}
+            </h3>
+            
+            <FormInput
+                label="ID de Proyecto (UUID o Código)"
+                id="id"
+                name="id"
+                // Si es nuevo, muestra el UUID generado (pero no editable); si existe, muestra el real.
+                defaultValue={proyecto?.id || newProjectId} 
+                required
+                disabled={true} // El ID se gestiona aquí y no debe ser editable
+            />
+            <FormInput
+                label="Nombre del Proyecto"
+                id="nombre_proyecto"
+                name="nombre_proyecto"
+                defaultValue={proyecto?.nombre_proyecto || ""}
+                required
+            />
+
+            <div className="grid grid-cols-2 gap-4">
+                <FormSelect
+                    label="Cliente"
+                    id="cliente_id"
+                    name="cliente_id"
+                    defaultValue={proyecto?.cliente_id || catalogos.clientes[0]?.id || ""}
+                    required
+                >
+                    {catalogos.clientes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                </FormSelect>
+                <FormSelect
+                    label="Project Manager (PM)"
+                    id="pm_id"
+                    name="pm_id"
+                    defaultValue={proyecto?.pm_id || catalogos.pms[0]?.id || ""}
+                    required
+                >
+                    {catalogos.pms.map(pm => <option key={pm.id} value={pm.id}>{pm.nombre_completo}</option>)}
+                </FormSelect>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+                <FormSelect
+                    label="Estatus"
+                    id="estatus_id"
+                    name="estatus_id"
+                    defaultValue={proyecto?.estatus_id || catalogos.estatus_proyectos[0]?.id || ""}
+                    required
+                >
+                    {catalogos.estatus_proyectos.map(e => <option key={e.id} value={e.id}>{e.nombre}</option>)}
+                </FormSelect>
+                <FormSelect
+                    label="Aplicación"
+                    id="aplicacion_id"
+                    name="aplicacion_id"
+                    defaultValue={proyecto?.aplicacion_id || catalogos.aplicaciones[0]?.id || ""}
+                    required
+                >
+                    {catalogos.aplicaciones.map(a => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+                </FormSelect>
+                <FormInput
+                    label="Horas Contratadas (Hs)"
+                    id="hs_proyecto"
+                    name="hs_proyecto"
+                    type="number"
+                    defaultValue={proyecto?.hs_proyecto || 0}
+                    required
+                    min="0"
+                />
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+                <FormInput
+                    label="Horas Insumidas (Hs)"
+                    id="hs_insumidas"
+                    name="hs_insumidas"
+                    type="number"
+                    defaultValue={proyecto?.hs_insumidas || 0}
+                    required
+                    min="0"
+                />
+                <FormInput
+                    label="Fecha de Inicio"
+                    id="fecha_inicio"
+                    name="fecha_inicio"
+                    type="date"
+                    defaultValue={proyecto?.fecha_inicio || ""}
+                />
+                <FormInput
+                    label="Fecha de Cierre"
+                    id="fecha_cierre"
+                    name="fecha_cierre"
+                    type="date"
+                    defaultValue={proyecto?.fecha_cierre || ""}
+                />
+            </div>
+
+            <div className="mt-8 flex justify-end space-x-3">
+                <Button type="button" variant="secundario" onClick={onClose} disabled={isSaving}>
+                    Cancelar
+                </Button>
+                <Button type="submit" variant="dorado" isLoading={isSaving}>
+                    {proyecto ? "Actualizar Proyecto" : "Crear Proyecto"}
+                </Button>
+            </div>
+        </form>
+      );
+    };
+
+    // Este componente existía en el código original pero nunca se usó.
+    const CargaMasivaModal = ({ isOpen, onClose, catalogoNombre, headers, onImportar }) => {
+      const [file, setFile] = useState(null);
+      const [parsedData, setParsedData] = useState([]);
+      const [error, setError] = useState(null);
+      const [success, setSuccess] = useState(null);
+      const [isImporting, setIsImporting] = useState(false);
+      const [isMounted, setIsMounted] = useState(false); 
+      const fileInputRef = useRef(null);
+      const { showToast } = useToast();
+      
+      const fileName = `${catalogoNombre.toLowerCase().replace(' ', '_')}_template.xlsx`;
+
+      useEffect(() => {
+        setIsMounted(true);
+        return () => setIsMounted(false);
+      }, []);
+
+      // Función para generar y descargar el template XLSX
+      const handleDownloadTemplate = () => {
+        const ws_data = [ headers ];
+        const ws = XLSX.utils.aoa_to_sheet(ws_data);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, catalogoNombre);
+        XLSX.writeFile(wb, fileName);
+      };
+
+      // Función para manejar la selección de archivo
+      const handleFileChange = (e) => {
+        const selectedFile = e.target.files[0];
+        if (isMounted) {
+            setError(null);
+            setSuccess(null);
+            setParsedData([]);
+        }
+        
+        if (!selectedFile) {
+          setFile(null);
+          return;
+        }
+        
+        if (!selectedFile.name.endsWith('.xlsx')) {
+          if (isMounted) setError('Error: El archivo debe ser de tipo .xlsx');
+          setFile(null);
+          return;
+        }
+        
+        setFile(selectedFile);
+        
+        // Validar el archivo
+        const reader = new FileReader();
+        reader.onload = function(event) {
+          try {
+            const data = event.target.result;
+            const workbook = XLSX.read(data, { type: 'binary' });
+            const sheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[sheetName];
+            const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+            if (jsonData.length < 2) { 
+              if (isMounted) setError("Error: El archivo está vacío o solo tiene cabeceras.");
+              return;
+            }
+            
+            const fileHeaders = jsonData[0].map(h => String(h).trim());
+            const expectedHeaders = headers.map(h => h.trim());
+            
+            if (fileHeaders.length !== expectedHeaders.length || !fileHeaders.every((h, i) => h === expectedHeaders[i])) {
+              if (isMounted) setError(`Error: Cabeceras no coinciden. Se esperaba: "${expectedHeaders.join(', ')}". Se recibió: "${fileHeaders.join(', ')}"`);
+              return;
+            }
+            
+            // Mapeo de array de arrays a array de objetos
+            const dataRows = jsonData.slice(1);
+            const parsedExcelData = dataRows.map(rowArray => {
+                let entry = {};
+                expectedHeaders.forEach((h, index) => {
+                  // Asegurarse de que el valor existe antes de hacer trim
+                  const value = rowArray[index];
+                  entry[h] = (value !== null && value !== undefined) ? String(value).trim() : '';
+                });
+                return entry;
+            }).filter(entry => Object.values(entry).some(v => v !== '')); // Filtrar filas totalmente vacías
+
+            
+            if (parsedExcelData.length === 0) {
+              if (isMounted) setError("Error: El archivo no contiene datos (solo cabeceras).");
+              return;
+            }
+            
+            if (isMounted) {
+                setParsedData(parsedExcelData);
+                setSuccess(`¡Archivo validado! ${parsedExcelData.length} registros encontrados.`);
+            }
+          
+          } catch (err) {
+              console.error("Error leyendo XLSX:", err);
+              if (isMounted) setError("Error: No se pudo leer el archivo. Asegúrese de que sea un .xlsx válido.");
+          }
+        };
+        
+        reader.readAsBinaryString(selectedFile);
+      };
+      
+      const handleImportarBatch = async () => {
+        setIsImporting(true);
+        try {
+            // Llama a la función del padre (onImportar)
+            await onImportar(parsedData); 
+            
+            if (isMounted) { 
+                showToast(`¡Éxito! Se importaron ${parsedData.length} registros.`, 'success');
+                handleClose(); // Cierra solo después de terminar
+            }
+        } catch (error) {
+            console.error("Error en handleImportar (catálogo):", error);
+            if (isMounted) {
+                showToast(`Error al importar: ${error.message}`, 'error');
+                setIsImporting(false); // Permite reintentar
+            }
+        }
+      };
+      
+      // Reseteamos el estado al cerrar
+      const handleClose = () => {
+        setFile(null);
+        setError(null);
+        setSuccess(null);
+        setParsedData([]);
+        setIsImporting(false);
+        if (fileInputRef.current) fileInputRef.current.value = null; // Resetear input
+        onClose();
+      };
+
+      return (
+        <Modal isOpen={isOpen} onClose={handleClose} title={`Carga Masiva de ${catalogoNombre}`}>
+          <div className="space-y-6">
+            {/* Paso 1: Descargar */}
+            <div>
+              <h4 className="font-display text-lg font-semibold tracking-wide text-blanco">Paso 1: Descargar Template (.xlsx)</h4>
+              <p className="text-sm mt-1 text-blanco/70 font-sans">
+                Descargue el archivo .xlsx, complételo y súbalo en el Paso 2.
+              </p>
+              <Button 
+                variant="terciario" 
+                onClick={handleDownloadTemplate} 
+                icon={IconDownload}
+                className="mt-2"
+              >
+                Descargar {fileName}
+              </Button>
+            </div>
+            
+            {/* Separador */}
+            <div className="border-t" style={{ borderColor: 'rgba(177, 169, 110, 0.3)' }} />
+
+            {/* Paso 2: Subir */}
+            <div>
+              <h4 className="font-display text-lg font-semibold tracking-wide text-blanco">Paso 2: Subir Archivo .xlsx</h4>
+              <label 
+                htmlFor={`file-upload-${catalogoNombre}`} 
+                className="mt-2 flex cursor-pointer justify-center rounded-xl border-2 border-dashed px-6 py-10 transition-colors hover:border-dorado/80"
+                style={{ borderColor: 'rgba(177, 169, 110, 0.5)' }}
+              >
+                <div className="text-center">
+                  <IconUpload className="mx-auto h-12 w-12" style={{ color: COLORES_BRANDING.textoGris }} />
+                  <div className="mt-4 flex font-sans text-sm leading-6 text-blanco/70">
+                    <span className="font-semibold text-dorado">
+                      {file ? file.name : 'Click para subir un archivo'}
+                    </span>
+                    {!file && <p className="pl-1">o arrástrelo aquí</p>}
+                  </div>
+                  {!file && <p className="text-xs text-blanco/50">Solo .xlsx</p>}
+                </div>
+                <input 
+                    id={`file-upload-${catalogoNombre}`} 
+                    name={`file-upload-${catalogoNombre}`} 
+                    type="file" 
+                    className="sr-only" 
+                    accept=".xlsx, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    onChange={handleFileChange} 
+                    ref={fileInputRef}
+                />
+              </label>
+            </div>
+            
+            {/* Mensajes de Estado */}
+            {error && (
+              <div className="rounded-md border p-4" style={{ borderColor: COLORES_BRANDING.errorSuave, backgroundColor: 'rgba(239, 68, 68, 0.1)' }}>
+                <p className="text-sm font-medium font-sans" style={{ color: COLORES_BRANDING.errorSuave }}>{error}</p>
+              </div>
+            )}
+            {success && (
+               <div className="rounded-md border p-4" style={{ borderColor: COLORES_BRANDING.exitoSuave, backgroundColor: 'rgba(16, 185, 129, 0.1)' }}>
+                <p className="text-sm font-medium font-sans" style={{ color: COLORES_BRANDING.exitoSuave }}>{success}</p>
+              </div>
+            )}
+
+            {/* Paso 3: Importar */}
+            <div className="mt-8 flex justify-end space-x-3">
+              <Button type="button" variant="secundario" onClick={handleClose} disabled={isImporting}>
+                Cancelar
+              </Button>
+              <Button 
+                type="button" 
+                onClick={handleImportarBatch}
+                isLoading={isImporting}
+                loadingText="Importando..."
+                disabled={parsedData.length === 0 || isImporting}
+              >
+                Importar {parsedData.length > 0 ? `(${parsedData.length} registros)` : ''}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      );
+    };
+
+    // Componente genérico para Clientes, Estatus, Aplicaciones, Módulos, Fases
+    const GenericCatalogManager = ({ title, data, headers, onSave, onDelete, onBatchImport, tableName, isLoading }) => {
+      const [isModalOpen, setIsModalOpen] = useState(false);
+      const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
+      const [editItem, setEditItem] = useState(null);
+      const [isSaving, setIsSaving] = useState(false);
+      const [isMounted, setIsMounted] = useState(false); 
+      const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+      const [itemToDelete, setItemToDelete] = useState(null);
+      
+      const { showToast } = useToast();
+      const { refreshCatalogos, loadingCatalogos } = useCatalogosData(); // Obtener refreshCatalogos
+
+      useEffect(() => {
+        setIsMounted(true);
+        return () => setIsMounted(false);
+      }, []);
+
+      const handleOpenModal = (item = null) => {
+        setEditItem(item);
+        setIsModalOpen(true);
+      };
+
+      const handleCloseModal = () => {
+        setIsModalOpen(false);
+        setEditItem(null);
+        setIsSaving(false);
+      };
+      
+      const handleOpenConfirm = (item) => {
+        setItemToDelete(item);
+        setIsConfirmOpen(true);
+      }
+      
+      const handleCloseConfirm = () => {
+        setItemToDelete(null);
+        setIsConfirmOpen(false);
+      }
+
+      // *** CORRECCIÓN: Implementar el guardado manual (crear/editar) ***
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setIsSaving(true);
+        const nombre = e.target.nombre.value;
+        
+        try {
+            // Llama a onSave del padre, que es la función handleSave de PageConfiguracion
+            await onSave(tableName, { id: editItem?.id, nombre }); 
+            // *** CORRECCIÓN: Añadir chequeo de isMounted ***
+            if (isMounted) {
+                showToast(editItem ? "Ítem actualizado" : "Ítem creado", 'success');
+                handleCloseModal(); 
+            }
+        } catch (error) {
+            // *** CORRECCIÓN: Añadir chequeo de isMounted ***
+            if (isMounted) {
+                 showToast(`Error al guardar: ${error.message}`, 'error');
+            }
+        } finally {
+            // *** CORRECCIÓN: Asegurar que isSaving se restablece siempre ***
+            if (isMounted) {
+                setIsSaving(false);
+            }
+        }
+      };
+
+      // *** CORRECCIÓN CRÍTICA: Implementar la eliminación y asegurarse de lanzar el error si falla ***
+      const confirmDeleteItem = async () => {
+          if (!itemToDelete) return;
+
+          try {
+              // Llama a onDelete del padre, que es la función handleDelete de PageConfiguracion
+              await onDelete(tableName, itemToDelete.id);
+              showToast("Ítem eliminado con éxito", 'success');
+              handleCloseConfirm();
+          } catch (error) {
+              // Si falla (ej: FK Constraint), el error se muestra aquí y se detiene.
+              showToast(`Error al eliminar: ${error.message}`, 'error');
+              handleCloseConfirm();
+          }
+      }
+      
+      // *** CORRECCIÓN: Ajustar la llamada de importación masiva para que la gestión de estado la haga el modal ***
+      const handleImportarBatch = async (parsedData) => {
+          try {
+              // El modal CargaMasivaModal gestiona su propio estado de carga y cierre
+              await onBatchImport(tableName, parsedData); 
+          } catch (error) {
+              throw error; // Propagar error para que CargaMasivaModal lo capture y lo muestre
+          }
+      }
+
+      return (
+        <div>
+          <div className="flex justify-end gap-3 mb-4">
+            {/* BOTÓN DE ACTUALIZAR - NUEVA CARACTERÍSTICA */}
+            <Button 
+                variant="terciario" 
+                onClick={refreshCatalogos} 
+                icon={loadingCatalogos ? IconSpinner : IconRefresh}
+                isLoading={loadingCatalogos}
+                loadingText="Actualizando..."
+            >
+              Actualizar Catálogos
+            </Button>
+            {/* FIN BOTÓN ACTUALIZAR */}
+
+            <Button variant="terciario" onClick={() => setIsBatchModalOpen(true)} icon={IconUpload}>
+              Carga Masiva (.xlsx)
+            </Button>
+            <Button variant="dorado" onClick={() => handleOpenModal(null)}>
+              + Añadir Nuevo
+            </Button>
+          </div>
+          
+          <DashboardList
+            title={`Listado de ${title}`}
+            items={data}
+            isLoading={isLoading}
+            columns={[
+              { key: 'nombre', label: 'Nombre' },
+              { key: 'acciones', label: 'Acciones' },
+            ]}
+            renderItem={(item) => (
+              <tr key={item.id} className="hover:bg-dorado/5 font-sans">
+                <td className="px-6 py-3 whitespace-nowrap text-sm text-texto-gris">{item.nombre}</td>
+                <td className="px-6 py-3 whitespace-nowrap text-sm font-medium space-x-3">
+                  <button onClick={() => handleOpenModal(item)} className="transition-colors text-dorado hover:text-dorado-darker" title="Editar">
+                    <IconPencil />
+                  </button>
+                  <button onClick={() => handleOpenConfirm(item)} className="transition-colors text-error-suave/70 hover:text-error-suave" title="Eliminar">
+                    <IconTrash />
+                  </button>
+                </td>
+              </tr>
+            )}
+          />
+          
+          {/* Modal de Edición/Creación Individual */}
+          <Modal
+            isOpen={isModalOpen}
+            onClose={handleCloseModal}
+            title={editItem ? `Editar ${title}` : `Crear ${title}`}
+          >
+            <form onSubmit={handleSubmit}>
+              <FormInput
+                label="Nombre"
+                id="nombre"
+                name="nombre"
+                defaultValue={editItem?.nombre || ""}
+                autoFocus
+                required
+              />
+              <div className="mt-8 flex justify-end space-x-3">
+                <Button type="button" variant="secundario" onClick={handleCloseModal} disabled={isSaving}>
+                  Cancelar
+                </Button>
+                <Button type="submit" variant="dorado" isLoading={isSaving}>
+                  Guardar
+                </Button>
+              </div>
+            </form>
+          </Modal>
+          
+          {/* Modal de Carga Masiva */}
+          <CargaMasivaModal
+            isOpen={isBatchModalOpen}
+            onClose={() => setIsBatchModalOpen(false)}
+            catalogoNombre={title}
+            headers={headers}
+            onImportar={handleImportarBatch}
+          />
+          
+          {/* Modal de Confirmación de Eliminación */}
+          <ConfirmModal
+              isOpen={isConfirmOpen}
+              onClose={handleCloseConfirm}
+              onConfirm={confirmDeleteItem}
+              title={`Confirmar Eliminación de ${title}`}
+              message={`¿Está seguro de que desea eliminar el ítem "${itemToDelete?.nombre || ''}"? Esta acción no se puede deshacer.`}
+          />
+        </div>
+      );
+    };
+
+    // Componente específico para Consultores (más complejo)
+    const ConsultoresManager = ({ data, onSave, onDelete, onBatchImport, isLoading }) => {
+      const [isModalOpen, setIsModalOpen] = useState(false);
+      const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
+      const [editItem, setEditItem] = useState(null);
+      const [isSaving, setIsSaving] = useState(false);
+      const [isPm, setIsPm] = useState(false); // Estado para el toggle
+      const [isMounted, setIsMounted] = useState(false); 
+      const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+      const [itemToDelete, setItemToDelete] = useState(null);
+
+      const { showToast } = useToast();
+      const { refreshCatalogos, loadingCatalogos } = useCatalogosData(); // Obtener refreshCatalogos
+      
+      useEffect(() => {
+        setIsMounted(true);
+        return () => setIsMounted(false);
+      }, []);
+
+      const headers = ['nombre_completo', 'user_id', 'es_pm']; // Template para consultores
+
+      const handleOpenModal = (item = null) => {
+        setEditItem(item);
+        setIsPm(item?.es_pm || false); // Sincronizar el estado del toggle
+        setIsModalOpen(true);
+      };
+
+      const handleCloseModal = () => {
+        setIsModalOpen(false);
+        setEditItem(null);
+        setIsPm(false);
+        setIsSaving(false);
+      };
+      
+      const handleOpenConfirm = (item) => {
+        setItemToDelete(item);
+        setIsConfirmOpen(true);
+      }
+      
+      const handleCloseConfirm = () => {
+        setItemToDelete(null);
+        setIsConfirmOpen(false);
+      }
+
+      // *** CORRECCIÓN: Implementar el guardado manual (crear/editar) ***
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setIsSaving(true);
+
+        const itemData = {
+          id: editItem?.id, // undefined si es nuevo
+          nombre_completo: e.target.nombre_completo.value,
+          user_id: e.target.user_id.value || null, // Aceptar null
+          es_pm: isPm, // Usar el estado del toggle
+        };
+
+        try {
+            // Llama a onSave del padre, que es la función handleSave de PageConfiguracion
+            await onSave('consultores', itemData);
+            if (isMounted) {
+                showToast(editItem ? "Consultor actualizado" : "Consultor creado", 'success');
+                handleCloseModal();
+            }
+        } catch (error) {
+            if (isMounted) {
+                 showToast(`Error al guardar: ${error.message}`, 'error');
+            }
+        } finally {
+            // *** CORRECCIÓN: Asegurar que isSaving se restablece siempre ***
+            if (isMounted) {
+                setIsSaving(false);
+            }
+        }
+      };
+      
+      // *** CORRECCIÓN CRÍTICA: Implementar la eliminación y asegurarse de lanzar el error si falla ***
+      const confirmDeleteItem = async () => {
+          if (!itemToDelete) return;
+
+          try {
+              // Llama a onDelete del padre, que es la función handleDelete de PageConfiguracion
+              await onDelete('consultores', itemToDelete.id);
+              showToast("Consultor eliminado con éxito", 'success');
+              handleCloseConfirm();
+          } catch (error) {
+              // Si falla (ej: FK Constraint), el error se muestra aquí y se detiene.
+              showToast(`Error al eliminar: ${error.message}`, 'error');
+              handleCloseConfirm();
+          }
+      }
+      
+      // *** CORRECCIÓN: Ajustar la llamada de importación masiva para que la gestión de estado la haga el modal ***
+      const handleImportarBatch = async (parsedData) => {
+          // El campo 'es_pm' viene como string, convertir a boolean
+          const formattedData = parsedData.map(item => ({
+              ...item,
+              es_pm: String(item.es_pm).toLowerCase() === 'true' || String(item.es_pm) === '1',
+              user_id: item.user_id || null // Asegurar null si está vacío
+          }));
+          
+          try {
+              // Llama a onBatchImport del padre, que es la función handleBatchImport de PageConfiguracion
+              await onBatchImport('consultores', formattedData);
+          } catch (error) {
+              throw error;
+          }
+      }
+
+      return (
+        <div>
+          <div className="flex justify-end gap-3 mb-4">
+            {/* BOTÓN DE ACTUALIZAR - NUEVA CARACTERÍSTICA */}
+            <Button 
+                variant="terciario" 
+                onClick={refreshCatalogos} 
+                icon={loadingCatalogos ? IconSpinner : IconRefresh}
+                isLoading={loadingCatalogos}
+                loadingText="Actualizando..."
+            >
+              Actualizar Catálogos
+            </Button>
+            {/* FIN BOTÓN ACTUALIZAR */}
+            
+            <Button variant="terciario" onClick={() => setIsBatchModalOpen(true)} icon={IconUpload}>
+              Carga Masiva (.xlsx)
+            </Button>
+            <Button variant="dorado" onClick={() => handleOpenModal(null)}>
+              + Añadir Nuevo
+            </Button>
+          </div>
+          
+          <DashboardList
+            title="Listado de Consultores"
+            items={data}
+            isLoading={isLoading}
+            columns={[
+              { key: 'nombre', label: 'Nombre Completo' },
+              { key: 'pm', label: 'Es PM' },
+              { key: 'user_id', label: 'User ID (Auth)' },
+              { key: 'acciones', label: 'Acciones' },
+            ]}
+            renderItem={(item) => (
+              <tr key={item.id} className="hover:bg-dorado/5 font-sans">
+                <td className="px-6 py-3 whitespace-nowrap text-sm text-texto-gris">{item.nombre_completo}</td>
+                <td className="px-6 py-3 whitespace-nowrap text-sm text-texto-gris">
+                  {item.es_pm ? 
+                    <span className="font-semibold text-dorado">Sí</span> : 
+                    <span className="text-texto-gris">No</span>
+                  }
+                </td>
+                <td className="px-6 py-3 whitespace-nowrap text-sm text-texto-gris font-mono text-xs">{item.user_id || 'N/A'}</td>
+                <td className="px-6 py-3 whitespace-nowrap text-sm font-medium space-x-3">
+                  <button onClick={() => handleOpenModal(item)} className="transition-colors text-dorado hover:text-dorado-darker" title="Editar">
+                    <IconPencil />
+                  </button>
+                  <button onClick={() => handleOpenConfirm(item)} className="transition-colors text-error-suave/70 hover:text-error-suave" title="Eliminar">
+                    <IconTrash />
+                  </button>
+                </td>
+              </tr>
+            )}
+          />
+          
+          {/* Modal de Edición/Creación Individual */}
+          <Modal
+            isOpen={isModalOpen}
+            onClose={handleCloseModal}
+            title={editItem ? "Editar Consultor" : "Crear Consultor"}
+            size="md"
+          >
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <FormInput
+                label="Nombre Completo"
+                id="nombre_completo"
+                name="nombre_completo"
+                defaultValue={editItem?.nombre_completo || ""}
+                autoFocus
+                required
+              />
+              <FormInput
+                label="User ID (de Supabase Auth)"
+                id="user_id"
+                name="user_id"
+                defaultValue={editItem?.user_id || ""}
+                placeholder="Pegar el UUID del usuario..."
+              />
+              <div className="flex items-center pt-2">
+                <ToggleSwitch
+                  enabled={isPm}
+                  onChange={setIsPm}
+                  label="Es Project Manager (PM)"
+                />
+              </div>
+              <div className="mt-8 flex justify-end space-x-3">
+                <Button type="button" variant="secundario" onClick={handleCloseModal} disabled={isSaving}>
+                  Cancelar
+                </Button>
+                <Button type="submit" variant="dorado" isLoading={isSaving}>
+                  Guardar
+                </Button>
+              </div>
+            </form>
+          </Modal>
+          
+          {/* Modal de Carga Masiva */}
+          <CargaMasivaModal
+            isOpen={isBatchModalOpen}
+            onClose={() => setIsBatchModalOpen(false)}
+            catalogoNombre="Consultores"
+            headers={headers}
+            onImportar={handleImportarBatch}
+          />
+          
+          {/* Modal de Confirmación de Eliminación */}
+          <ConfirmModal
+              isOpen={isConfirmOpen}
+              onClose={handleCloseConfirm}
+              onConfirm={confirmDeleteItem}
+              title="Confirmar Eliminación de Consultor"
+              message={`¿Está seguro de que desea eliminar al consultor "${itemToDelete?.nombre_completo || ''}"? Esto no se puede deshacer.`}
+          />
+        </div>
+      );
+    };
+
+
+    const PageConfiguracion = () => {
+      const [activeTab, setActiveTab] = useState('clientes');
+      const { catalogos, loadingCatalogos, refreshCatalogos } = useCatalogosData();
+      const { showToast } = useToast();
+      
+      // Acciones CRUD genéricas
+      const handleSave = async (tableName, item) => {
+        if (!supabase) throw new Error(authError || "Cliente de Supabase no disponible.");
+        
+        // --- LÓGICA CRÍTICA DE DUPLICIDAD EN CREACIÓN (Clientes) ---
+        if (!item.id && tableName === 'clientes') {
+            const { data, error: fetchError } = await supabase
+                .from('clientes')
+                .select('id')
+                .eq('nombre', item.nombre)
+                .maybeSingle();
+
+            if (fetchError) {
+                throw new Error(`Error al verificar existencia: ${fetchError.message}`);
+            }
+            if (data) {
+                // Si ya existe, lanza un error con un mensaje claro
+                throw new Error(`El cliente "${item.nombre}" ya existe. No se puede crear duplicado.`);
+            }
+        }
+        
+        // Guardar/Actualizar
+        const { error } = await supabase.from(tableName).upsert(item);
+        if (error) {
+            console.error(`Error guardando en ${tableName}:`, error);
+            throw error; // Lanza el error al componente hijo
+        }
+        await refreshCatalogos(); // Recarga todo
+      };
+      
+      // *** CORRECCIÓN CRÍTICA: La función debe lanzar el error para que el componente hijo lo capture y lo muestre ***
+      const handleDelete = async (tableName, id) => {
+        if (!supabase) throw new Error(authError || "Cliente de Supabase no disponible.");
+        const { error } = await supabase.from(tableName).delete().eq('id', id);
+        if (error) {
+            console.error(`Error eliminando en ${tableName}:`, error);
+            throw error; // Lanza el error
+        }
+        await refreshCatalogos();
+      };
+      
+      const handleBatchImport = async (tableName, items) => {
+        if (!supabase) throw new Error(authError || "Cliente de Supabase no disponible.");
+        // 'items' es un array de objetos listos para insertar
+        // Usamos upsert para evitar duplicados si los IDs son fijos
+        try {
+            const { error } = await supabase.from(tableName).upsert(items, { onConflict: 'id' });
+            if (error) {
+                console.error(`Error en carga masiva a ${tableName}:`, error);
+                throw error;
+            }
+            await refreshCatalogos();
+        } catch (error) {
+            throw error;
+        }
+      };
+      
+      // Definición de las pestañas
+      const tabs = [
+        { id: 'clientes', label: 'Clientes', headers: ['nombre'], tableName: 'clientes' },
+        { id: 'estatus_proyectos', label: 'Estatus', headers: ['nombre'], tableName: 'estatus_proyectos' },
+        { id: 'aplicaciones', label: 'Aplicaciones', headers: ['nombre'], tableName: 'aplicaciones' },
+        { id: 'modulos', label: 'Módulos', headers: ['nombre'], tableName: 'modulos' },
+        { id: 'fases', label: 'Fases', headers: ['nombre'], tableName: 'fases' },
+        { id: 'consultores', label: 'Consultores', headers: ['nombre_completo', 'user_id', 'es_pm'], tableName: 'consultores' },
+      ];
+
+      const renderActiveTab = () => {
+        const tabConfig = tabs.find(t => t.id === activeTab);
+        
+        if (loadingCatalogos) {
+            return (
+                <div className="flex justify-center items-center py-12">
+                    <IconSpinner className="w-8 h-8 animate-spin text-dorado" />
+                    <span className="ml-3 font-display text-xl text-texto-gris">Cargando catálogos...</span>
+                </div>
+            );
+        }
+
+        switch(activeTab) {
+          case 'consultores':
+            return <ConsultoresManager 
+                      data={catalogos.consultores}
+                      isLoading={loadingCatalogos}
+                      onSave={handleSave}
+                      onDelete={handleDelete}
+                      onBatchImport={handleBatchImport}
+                    />;
+          default:
+            return <GenericCatalogManager 
+                      title={tabConfig.label}
+                      headers={tabConfig.headers}
+                      tableName={tabConfig.tableName}
+                      data={catalogos[activeTab]}
+                      isLoading={loadingCatalogos}
+                      onSave={handleSave}
+                      onDelete={handleDelete}
+                      onBatchImport={handleBatchImport}
+                    />;
+        }
+      };
+
+      return (
+        <div className="space-y-6">
+          
+          <div className="flex items-center justify-between">
+            <h2
+                className="font-display text-5xl font-bold tracking-wider text-azul-oscuro"
+            >
+                Configuración del Sistema
+            </h2>
+          </div>
+          
+          {/* Sistema de Pestañas (Tabs) */}
+          <GlassPanel className="p-2">
+            <div className="border-b border-dorado/20">
+              <nav className="-mb-px flex space-x-6 overflow-x-auto px-4" aria-label="Tabs">
+                {tabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`whitespace-nowrap border-b-4 py-4 px-1 font-display text-sm font-bold uppercase tracking-wider transition-colors duration-150
+                      ${
+                        activeTab === tab.id
+                          ? 'border-dorado text-dorado'
+                          : 'border-transparent text-texto-gris hover:border-gris-medio hover:text-texto-principal'
+                      }
+                    `}
+                    aria-current={activeTab === tab.id ? "page" : undefined}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </nav>
+            </div>
+            
+            {/* Contenido de la Pestaña Activa */}
+            <div className="mt-6 px-4 pb-4">
+              {renderActiveTab()}
+            </div>
+          </GlassPanel>
+        </div>
+      );
+    };
+    
+    // El componente PageProyectos estaba incompleto/ausente en el código original.
+    // Lo crearemos como un listado básico para evitar un error de componente no definido.
+    const PageProyectos = () => {
+        const { loadingCatalogos, refreshCatalogos } = useCatalogosData();
+        const { showToast } = useToast();
+        const [proyectos, setProyectos] = useState([]);
+        const [loadingProyectos, setLoadingProyectos] = useState(true);
+        const [isModalOpen, setIsModalOpen] = useState(false);
+        const [editProyecto, setEditProyecto] = useState(null);
+        const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
+        const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+        const [proyectoToDelete, setProyectoToDelete] = useState(null);
+
+
+        const fetchProyectos = async () => {
+            if (!supabase) { setLoadingProyectos(false); return; }
+            setLoadingProyectos(true);
+            const { data, error } = await supabase.from('proyectos').select('*');
+            if (error) {
+                console.error("Error al cargar proyectos:", error);
+                showToast("Error al cargar proyectos: " + error.message, 'error');
+            } else {
+                setProyectos(data || []);
+            }
+            setLoadingProyectos(false);
+        };
+
+        useEffect(() => {
+            // Utilizamos onSnapshot si fuera necesario el tiempo real,
+            // pero por simplicidad de un proyecto grande, usamos fetchProyectos.
+            if (!loadingCatalogos) {
+                fetchProyectos();
+            }
+        }, [loadingCatalogos]);
+
+        const handleSaveProyecto = async (proyectoData) => {
+             if (!supabase) throw new Error(authError || "Cliente de Supabase no disponible.");
+             // Verificamos si el ID es un UUID/String válido antes de enviarlo
+             if (typeof proyectoData.id !== 'string' || proyectoData.id.length < 5) {
+                throw new Error("El ID del proyecto no es válido.");
+             }
+             const { error } = await supabase.from('proyectos').upsert(proyectoData);
+             if (error) {
+                 console.error("Error guardando proyecto:", error);
+                 // *** CORRECCIÓN CRÍTICA: Si falla, lanza el error de Supabase para que FormularioProyecto lo atrape y lo muestre ***
+                 throw new Error(error.message); 
+             }
+             await fetchProyectos(); // Recargar lista
+        };
+        
+        // *** NUEVA FUNCIÓN: Eliminar Proyecto ***
+        const handleDeleteProyecto = async (id) => {
+            if (!supabase) throw new Error(authError || "Cliente de Supabase no disponible.");
+            
+            const { error } = await supabase.from('proyectos').delete().eq('id', id);
+            if (error) {
+                console.error(`Error eliminando proyecto ${id}:`, error);
+                throw new Error(error.message);
+            }
+            await fetchProyectos();
+        };
+
+        const handleBatchImportProyectos = async (items) => {
+            if (!supabase) throw new Error(authError || "Cliente de Supabase no disponible.");
+            
+            // *** CORRECCIÓN CRÍTICA: Generar UUID para ítems sin ID antes de la inserción ***
+            const itemsWithGeneratedIds = items.map(item => ({
+                ...item,
+                id: item.id && item.id.trim() !== '' ? item.id : generateUUID()
+            }));
+            
+            // La función upsertChunked ya maneja la inserción por lotes
+            // upsertChunked ya lanza errores detallados
+            await upsertChunked('proyectos', itemsWithGeneratedIds);
+            await fetchProyectos(); // Recargar lista
+        };
+
+        const handleOpenModal = (proyecto = null) => {
+            setEditProyecto(proyecto);
+            setIsModalOpen(true);
+        }
+
+        const handleCloseModal = () => {
+            setIsModalOpen(false);
+            setEditProyecto(null);
+        }
+        
+        const handleOpenConfirm = (proyecto) => {
+            setProyectoToDelete(proyecto);
+            setIsConfirmOpen(true);
+        }
+
+        const handleCloseConfirm = () => {
+            setProyectoToDelete(null);
+            setIsConfirmOpen(false);
+        }
+        
+        const confirmDeleteProyecto = async () => {
+            if (!proyectoToDelete) return;
+            try {
+                await handleDeleteProyecto(proyectoToDelete.id);
+                showToast("Proyecto eliminado con éxito", 'success');
+                handleCloseConfirm();
+            } catch (error) {
+                showToast(`Error al eliminar: ${error.message}`, 'error');
+                handleCloseConfirm();
+            }
+        }
+
+        const isLoading = loadingProyectos || loadingCatalogos;
+
+        return (
+            <div className="space-y-6">
+                <h2 className="font-display text-5xl font-bold tracking-wider text-azul-oscuro">
+                    Gestión de Proyectos
+                </h2>
+
+                <div className="flex justify-end gap-3 mb-4">
+                    <Button variant="terciario" onClick={() => setIsBatchModalOpen(true)} icon={IconUpload}>
+                      Carga Masiva (.xlsx)
+                    </Button>
+                    <Button variant="dorado" onClick={() => handleOpenModal(null)}>
+                        + Nuevo Proyecto
+                    </Button>
+                </div>
+
+                <DashboardList
+                    title="Listado General de Proyectos"
+                    items={proyectos}
+                    isLoading={isLoading}
+                    columns={[
+                        { key: 'id', label: 'ID' },
+                        { key: 'nombre_proyecto', label: 'Nombre' },
+                        { key: 'hs_proyecto', label: 'Hs Contratadas' },
+                        { key: 'acciones', label: 'Acciones' },
+                    ]}
+                    renderItem={(item) => (
+                      <tr key={item.id} className="hover:bg-dorado/5 font-sans">
+                        <td className="px-6 py-3 whitespace-nowrap text-sm text-texto-gris">{item.id}</td>
+                        <td className="px-6 py-3 whitespace-nowrap text-sm text-texto-gris">{item.nombre_proyecto}</td>
+                        <td className="px-6 py-3 whitespace-nowrap text-sm text-texto-gris">{item.hs_proyecto}</td>
+                        <td className="px-6 py-3 whitespace-nowrap text-sm font-medium space-x-3">
+                          <button onClick={() => handleOpenModal(item)} className="transition-colors text-dorado hover:text-dorado-darker" title="Editar">
+                            <IconPencil />
+                          </button>
+                          {/* *** NUEVO BOTÓN DE ELIMINAR *** */}
+                          <button onClick={() => handleOpenConfirm(item)} className="transition-colors text-error-suave/70 hover:text-error-suave" title="Eliminar">
+                            <IconTrash />
+                          </button>
+                        </td>
+                      </tr>
+                    )}
+                />
+                
+                <Modal 
+                    isOpen={isModalOpen} 
+                    onClose={handleCloseModal} 
+                    title={editProyecto ? "Editar Proyecto" : "Crear Proyecto"}
+                    size="xl"
+                >
+                    <FormularioProyecto 
+                        proyecto={editProyecto} 
+                        onClose={handleCloseModal} 
+                        onSave={handleSaveProyecto}
+                    />
+                </Modal>
+                
+                <CargaMasivaProyectosModal
+                    isOpen={isBatchModalOpen}
+                    onClose={() => setIsBatchModalOpen(false)}
+                    onImportar={handleBatchImportProyectos}
+                />
+                
+                {/* Modal de Confirmación de Eliminación de Proyectos */}
+                <ConfirmModal
+                    isOpen={isConfirmOpen}
+                    onClose={handleCloseConfirm}
+                    onConfirm={confirmDeleteProyecto}
+                    title="Confirmar Eliminación de Proyecto"
+                    message={`¿Está seguro de que desea eliminar el proyecto "${proyectoToDelete?.nombre_proyecto || ''}" (ID: ${proyectoToDelete?.id})? Esto no se puede deshacer.`}
+                />
+            </div>
+        );
+    }
+
+
+    // --- 4. Página: Login (AuthPage) ---
+    const AuthPage = () => {
+      // Banner si hay problema de configuración de Supabase
+      const configError = authError;
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [isLoginView, setIsLoginView] = useState(true);
+      const [isLoading, setIsLoading] = useState(false);
+      const [isMounted, setIsMounted] = useState(false); // Flag de Memory Leak
+
+      const { signIn, signUp } = useAuth();
+      const { showToast } = useToast();
+
+      useEffect(() => {
+        setIsMounted(true);
+        return () => setIsMounted(false);
+      }, []);
+      
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        
+        if (authError) {
+            showToast(authError, 'error');
+            return;
+        }
+        
+        setIsLoading(true);
+        
+        try {
+          let response;
+          if (isLoginView) {
+            response = await signIn(email, password);
+          } else {
+            response = await signUp(email, password);
+          }
+          
+          if (response.error) {
+            // Manejar error de Supabase
+            if (isMounted) {
+                showToast(response.error.message || "Error desconocido.", 'error');
+            }
+          } else {
+            // Éxito
+            if (!isLoginView) {
+              showToast("¡Registro exitoso! Revise su correo para confirmar.", 'success');
+            }
+            // El AuthProvider se encarga de la redirección
+          }
+        } catch (err) {
+            if (isMounted) {
+                showToast("Error inesperado: " + err.message, 'error');
+            }
+        } finally {
+            if (isMounted) {
+                setIsLoading(false);
+            }
+        }
+      };
+
+      // Si hay un error de inicialización, mostrarlo
+      if (authError) {
+          return (
+            <div className="flex h-screen w-screen items-center justify-center bg-azul-oscuro p-8">
+                <div className="rounded-2xl border p-6 text-center" 
+                     style={{ borderColor: COLORES_BRANDING.errorSuave, backgroundColor: 'rgba(239, 68, 68, 0.1)' }}>
+                    <h1 className="font-display text-2xl mb-4" style={{ color: COLORES_BRANDING.errorSuave }}>Error de Configuración</h1>
+                    <p className="font-sans text-lg text-blanco">{authError}</p>
+                    <p className="font-sans text-md text-blanco/70 mt-4">Por favor, revise las credenciales de Supabase en el archivo HTML.</p>
+                </div>
+            </div>
+          );
+      }
+
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-azul-oscuro p-4">
+          <div 
+            className="w-full max-w-md overflow-hidden rounded-2xl shadow-suave"
+            style={{
+                backgroundColor: 'rgba(13, 34, 64, 0.75)', // azul-oscuro al 75%
+                backdropFilter: 'blur(12px)',
+                border: '1px solid rgba(177, 169, 110, 0.2)', // borde dorado/20
+            }}
+          >
+            <div className="p-8 sm:p-10">
+              <div className="text-center">
+                <h1 className="font-display text-5xl font-bold tracking-wider text-blanco">
+                  BlatoRH<span className="text-dorado">.</span>
+                </h1>
+                <h2 className="mt-4 font-display text-2xl font-semibold tracking-wide text-blanco/90">
+                  {isLoginView ? "Iniciar sesión" : "Crear nueva cuenta"}
+                </h2>
+              </div>
+
+              <div className="mt-8">
+                <form onSubmit={handleSubmit} className="space-y-6">
+                  <FormInput
+                    label="Email"
+                    id="email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    required
+                    autoComplete="email"
+                  />
+                  <FormInput
+                    label="Contraseña"
+                    id="password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    autoComplete={isLoginView ? "current-password" : "new-password"}
+                  />
+                  
+                  <div>
+                    <Button 
+                        type="submit" 
+                        variant="dorado" 
+                        className="w-full"
+                        isLoading={isLoading}
+                        loadingText={isLoginView ? "Ingresando..." : "Creando..."}
+                    >
+                      {isLoginView ? "Ingresar" : "Crear Cuenta"}
+                    </Button>
+                  </div>
+                </form>
+                
+                <div className="mt-6">
+                  <p className="text-center text-sm text-blanco/70 font-sans">
+                    {isLoginView ? "¿No tienes cuenta?" : "¿Ya tienes cuenta?"}
+                    <button
+                      onClick={() => {
+                        setIsLoginView(!isLoginView);
+                      }}
+                      className="ml-2 font-semibold text-dorado transition-opacity hover:text-dorado-darker"
+                    >
+                      {isLoginView ? "Créa una aquí" : "Inicia sesión"}
+                    </button>
+                  </p>
+                </div>
+                
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // --- Componente Principal del Layout (v12) ---
+
+    const AppLayout = () => {
+      const [currentPage, setCurrentPage] = useState('dashboard');
+      const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+      const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
+      const handleNavigate = (page) => {
+          setCurrentPage(page);
+          setIsMobileMenuOpen(false); // Cierra el menú móvil al navegar
+      };
+
+      const handleMobileToggle = () => {
+          setIsMobileMenuOpen(!isMobileMenuOpen);
+      };
+
+      const renderPage = () => {
+        switch (currentPage) {
+          case 'dashboard':
+            return <PageDashboard />;
+          case 'proyectos':
+            return <PageProyectos />;
+          case 'configuracion':
+            return <PageConfiguracion />;
+          default:
+            return <PageDashboard />;
+        }
+      };
+
+      return (
+        <div className="flex h-screen overflow-hidden bg-gris-claro">
+          {/* Sidebar (visible en escritorio) */}
+          <div className="hidden lg:flex lg:flex-shrink-0">
+            <Sidebar 
+                currentPage={currentPage} 
+                onNavigate={handleNavigate}
+                isCollapsed={isSidebarCollapsed}
+            />
+          </div>
+
+          {/* Menú Móvil (Dropdown) - Se renderiza aquí para pasarle props */}
+           <MobileMenu 
+                isOpen={isMobileMenuOpen}
+                currentPage={currentPage}
+                onNavigate={handleNavigate}
+            />
+
+          {/* Contenido Principal */}
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <Header 
+                onMenuToggle={() => setIsSidebarCollapsed(!isSidebarCollapsed)} 
+                isSidebarCollapsed={isSidebarCollapsed}
+                onMobileToggle={handleMobileToggle}
+                isMobileMenuOpen={isMobileMenuOpen}
+            />
+            <main
+              className="flex-1 overflow-y-auto overflow-x-hidden p-6 lg:p-8"
+            >
+              {renderPage()}
+            </main>
+          </div>
+        </div>
+      );
+    };
+
+
+    // --- Aplicación Raíz ---
+
+    const App = () => {
+      const { user } = useAuth();
+      // Si hay error de configuración, AuthPage lo muestra y evita el loop de AuthProvider
+      return user ? <AppLayout /> : <AuthPage />;
+    };
+
+    // --- Componente Raíz con Providers ---
+    const Root = () => {
+        return (
+            <ToastProvider>
+                <AuthProvider>
+                    <CatalogosProvider>
+                        <App />
+                    </CatalogosProvider>
+                </AuthProvider>
+            </ToastProvider>
+        );
+    };
+
+    // Renderizar la aplicación
+    ReactDOM.render(
+      <Root />,
+      document.getElementById('root')
+    );
+
+    </script>
+</body>
+</html>
