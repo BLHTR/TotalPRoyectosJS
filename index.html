@@ -321,7 +321,7 @@ const { useState, createContext, useContext, useEffect, useMemo, forwardRef, use
                 // Verificación y asignación de datos
                 const clientes = checkError(clientesRes, 'clientes') ? [] : clientesRes.data;
                 const estatus_proyectos = checkError(estatusRes, 'estatus_proyectos') ? [] : estatusRes.data;
-                const modulos = checkError(modulosRes, 'modulos') ? [] : modulosRes.data;
+                const aplicaciones = checkError(aplicacionesRes, 'aplicaciones') ? [] : aplicacionesRes.data;
                 const modulos = checkError(modulosRes, 'modulos') ? [] : modulosRes.data;
                 const fases = checkError(fasesRes, 'fases') ? [] : fasesRes.data;
                 const consultores = checkError(consultoresRes, 'consultores') ? [] : consultoresRes.data;
@@ -333,6 +333,8 @@ const { useState, createContext, useContext, useEffect, useMemo, forwardRef, use
                 setCatalogos({
                     clientes,
                     estatus_proyectos,
+                    aplicaciones,
+                    modulos,
                     aplicaciones,
                     modulos,
                     fases,
