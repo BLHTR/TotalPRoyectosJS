@@ -494,7 +494,13 @@ const { useState, createContext, useContext, useEffect, useMemo, forwardRef, use
       // Si loading=true Y SÍ HAY authError, se pasa al AuthPage que lo gestiona
 
       return (
-        <AuthContext.Provider value={authValue}>
+        
+      const authValue = { user, role, loading,
+        signIn,
+        signUp,
+        signOut
+      };
+<AuthContext.Provider value={authValue}>
           {children}
         </AuthContext.Provider>
       );
