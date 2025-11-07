@@ -110,6 +110,7 @@
 
   <!-- Topbar -->
   <header class="topbar hidden" id="topbar">
+    <div class="muted" style="position:absolute;left:50%;transform:translateX(-50%);font-size:12px;opacity:.8">PROD v1.0.1</div>
     <div class="brand">BlatoRH<span class="dot">.</span></div>
     <div class="right">
       <button id="btn-config" class="btn secondary">Configuración</button>
@@ -241,6 +242,7 @@
   <div id="toasts"></div>
 
 <script>
+console.log('PROD v1.0.1 - BlatoRH build sin React/Babel');
 (function(){
   // ============ Helpers UI ============
   const $ = (sel) => document.querySelector(sel);
